@@ -132,3 +132,22 @@ struct InfoRow: View {
         }
     }
 }
+// MARK: - PIN Kapısı Sayfası
+struct PinGateSheet: View {
+    @EnvironmentObject var securityManager: SecurityManager
+    @EnvironmentObject var themeManager: ThemeManager
+    var title: String
+    var subtitle: String
+    var onSuccess: () -> Void
+
+    var body: some View {
+        ZStack {
+            LinearGradient(colors: themeManager.backgroundGradient, startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea()
+
+            PasscodeView(title: title, subtitle: subtitle, onUnlockSuccess: onSuccess)
+                .environmentObject(securityManager)
+                .environmentObject(themeManager)
+        }
+    }
+}
