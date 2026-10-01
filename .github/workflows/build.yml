@@ -18,31 +18,42 @@ jobs:
 
       - name: Projeyi Derle ve IPA Olustur
         run: |
+          set -e
           mkdir -p build/Payload/AppVault.app
           
-          # Swift dosyalarini ARM64 iOS icin derle
-          xcrun --sdk iphoneos swiftc AppVault/App/*.swift AppVault/Core/*.swift AppVault/Views/*.swift \
+          # Swift dosyalarini topla
+          SWIFT_FILES=$(find AppVault -name "*.swift" ! -path "*/ShieldExtension/*")
+          echo "Derlenecek dosyalar: $SWIFT_FILES"
+
+          # Resmi Apple iOS SDK ile ARM64 Binary Derle
+          xcrun --sdk iphoneos swiftc $SWIFT_FILES \
             -target arm64-apple-ios16.0 \
-            -import-objc-header /dev/null \
+            -module-name AppVault \
+            -parse-as-library \
             -emit-executable \
             -o build/Payload/AppVault.app/AppVault \
             -framework SwiftUI \
             -framework FamilyControls \
             -framework ManagedSettings \
-            -framework Foundation || true
+            -framework Foundation
 
-          # Info.plist ve gereksinimleri kopyala
+          # Binary'nin gercekten olustugunu dogrula
+          ls -lh build/Payload/AppVault.app/AppVault
+          file build/Payload/AppVault.app/AppVault
+
+          # Info.plist ve Entitlements kopyala
           cp AppVault/Info.plist build/Payload/AppVault.app/Info.plist
           cp AppVault/AppVault.entitlements build/Payload/AppVault.app/AppVault.entitlements
           echo -n "APPL????" > build/Payload/AppVault.app/PkgInfo
 
-          # Sahte imza (Ad-hoc signature) uygula (Sideloadly yeniden imzalayacak)
-          codesign --force --deep --sign - build/Payload/AppVault.app || true
+          # Ad-hoc imzalama (Sideloadly yeniden imzalayacaktir)
+          codesign --force --deep --sign - build/Payload/AppVault.app
 
-          # IPA olarak ziple
+          # Gercek IPA paketi olustur
           cd build
-          zip -r AppVault.ipa Payload
+          zip -r -9 AppVault.ipa Payload
           cd ..
+          ls -lh build/AppVault.ipa
 
       - name: IPA Dosyasini Yukle
         uses: actions/upload-artifact@v4
