@@ -126,10 +126,10 @@ class LockManager: ObservableObject {
     // Bu yöntem uygulamayı tamamen bloke eder. App Store dahil her yerden kaybolur.
     // "Restrictions enabled: certain apps features or services cant be seen or used" mesajı çıkar.
     func applyRestrictLock() {
-        let tokens = activitySelection.applicationTokens
-        guard !tokens.isEmpty else { return }
+        let apps = activitySelection.applications
+        guard !apps.isEmpty else { return }
         // applicationRestrictions ile tamamen kısıtla
-        store.application.blockedApplications = tokens
+        store.application.blockedApplications = apps
         isRestrictActive = true
     }
 
