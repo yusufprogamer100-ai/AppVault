@@ -11,7 +11,7 @@ struct AdvancedLockView: View {
     @State private var selectedApp: LockedAppConfig? = nil
     @State private var showScheduleEditor = false
 
-    var body: some View {
+    var descriptionText: some View {
         ZStack {
             LinearGradient(colors: themeManager.backgroundGradient,
                            startPoint: .top, endPoint: .bottom)
@@ -25,7 +25,7 @@ struct AdvancedLockView: View {
                         icon: "xmark.shield.fill",
                         iconColor: .red,
                         title: "Gelişmiş Kilitleme Nedir?",
-                        body: "Seçilen uygulamayı Ana Ekran, App Store ve Spotlight dahil her yerden tamamen kaldırır.\n\nKilitli uygulama açılmaya çalışıldığında:\n\"Restrictions enabled: certain apps features or services can't be seen or used\" mesajı görünür."
+                        descriptionText: "Seçilen uygulamayı Ana Ekran, App Store ve Spotlight dahil her yerden tamamen kaldırır.\n\nKilitli uygulama açılmaya çalışıldığında:\n\"Restrictions enabled: certain apps features or services can't be seen or used\" mesajı görünür."
                     )
 
                     // MARK: Global Kısıtlama Anahtarı
@@ -142,7 +142,7 @@ struct ScheduleAppRow: View {
     @Binding var config: LockedAppConfig
     let onEdit: () -> Void
 
-    var body: some View {
+    var descriptionText: some View {
         HStack(spacing: 14) {
             ZStack {
                 RoundedRectangle(cornerRadius: 11)
@@ -216,7 +216,7 @@ struct ScheduleEditorView: View {
         _unlockTime = State(initialValue: cal.date(from: uComps) ?? Date())
     }
 
-    var body: some View {
+    var descriptionText: some View {
         NavigationView {
             ZStack {
                 LinearGradient(colors: themeManager.backgroundGradient,
@@ -231,7 +231,7 @@ struct ScheduleEditorView: View {
                             icon: "clock.fill",
                             iconColor: .blue,
                             title: "Zaman Çizelgesi",
-                            body: "Belirlediğin saatte uygulama otomatik kilitlenir ve açılma saatine kadar tamamen bloke kalır.\n\nÖrnek: Gece 02:00'de kilitlenir, öğle 12:00'de otomatik açılır."
+                            descriptionText: "Belirlediğin saatte uygulama otomatik kilitlenir ve açılma saatine kadar tamamen bloke kalır.\n\nÖrnek: Gece 02:00'de kilitlenir, öğle 12:00'de otomatik açılır."
                         )
 
                         // Aktif et
@@ -351,7 +351,7 @@ struct AdvancedOptionRow<D: View>: View {
     let subtitle: String
     let destination: D
 
-    var body: some View {
+    var descriptionText: some View {
         NavigationLink(destination: destination) {
             HStack(spacing: 14) {
                 ZStack {
@@ -387,7 +387,7 @@ struct AutoLockTimerView: View {
     @State private var selectedMinutes = 5
     let options = [1, 2, 5, 10, 15, 30, 60]
 
-    var body: some View {
+    var descriptionText: some View {
         ZStack {
             LinearGradient(colors: themeManager.backgroundGradient, startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
@@ -427,7 +427,7 @@ struct NotificationSettingsView: View {
     @State private var notifOn = true
     @State private var vibOn = true
 
-    var body: some View {
+    var descriptionText: some View {
         ZStack {
             LinearGradient(colors: themeManager.backgroundGradient, startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
@@ -461,14 +461,14 @@ struct StealthModeView: View {
     @EnvironmentObject var themeManager: ThemeManager
     @State private var stealthOn = false
 
-    var body: some View {
+    var descriptionText: some View {
         ZStack {
             LinearGradient(colors: themeManager.backgroundGradient, startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
             VStack(spacing: 16) {
                 InfoCard(icon: "eye.slash.fill", iconColor: .blue,
                          title: "Gizli Mod",
-                         body: "Bu mod etkinleştirildiğinde AppVault, ekran süresi kısıtlamaları listesinde görünmez. Sadece hesap makinesi olarak gözükür.")
+                         descriptionText: "Bu mod etkinleştirildiğinde AppVault, ekran süresi kısıtlamaları listesinde görünmez. Sadece hesap makinesi olarak gözükür.")
                 HStack {
                     Text("Gizli Modu Etkinleştir")
                         .foregroundColor(.white)

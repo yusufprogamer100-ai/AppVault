@@ -18,7 +18,7 @@ struct InfoCard: View {
     let icon: String
     let iconColor: Color
     let title: String
-    let body: String
+    let descriptionText: String
 
     var body: some View {
         HStack(alignment: .top, spacing: 14) {
@@ -30,7 +30,7 @@ struct InfoCard: View {
                 Text(title)
                     .font(.subheadline).fontWeight(.semibold)
                     .foregroundColor(.white)
-                Text(body)
+                Text(descriptionText)
                     .font(.caption)
                     .foregroundColor(.white.opacity(0.5))
                     .lineSpacing(4)
