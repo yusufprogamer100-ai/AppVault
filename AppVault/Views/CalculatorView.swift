@@ -44,7 +44,11 @@ struct CalculatorView: View {
                             ForEach(row, id: \.self) { btn in
                                 CalcButtonView(button: btn, action: {
                                     handleButton(btn)
-                                })
+                                }, longPressAction: btn == .zero ? {
+                                    withAnimation(.spring()) {
+                                        securityManager.isUnlocked = true
+                                    }
+                                } : nil)
                             }
                         }
                     }
@@ -75,19 +79,12 @@ struct CalculatorView: View {
             }
 
         case .equals:
-            // GİZLİ PIN KONTROLÜ: 0000 = → Gerçek Uygulamayı Aç
-            if currentInput == "0000" {
-                withAnimation(.spring()) {
-                    securityManager.isUnlocked = true
-                }
-            } else {
-                // Normal hesaplama (basit gösterim)
-                display = currentInput.isEmpty ? "0" : formatDisplay(currentInput)
-            }
+            // Normal hesaplama (basit gösterim)
+            display = currentInput.isEmpty ? "0" : formatDisplay(currentInput)
             currentInput = ""
 
         case .divide, .multiply, .minus, .plus:
-            // Operatör tuşları - gerçek operatör mantığı ekle
+            // Operatör tuşları
             if !currentInput.isEmpty {
                 display = formatDisplay(currentInput)
             }
@@ -168,32 +165,46 @@ enum CalcButton: String, CaseIterable, Hashable {
 struct CalcButtonView: View {
     let button: CalcButton
     let action: () -> Void
+    var longPressAction: (() -> Void)? = nil
 
+    @State private var isPressed = false
     private let buttonSize: CGFloat = (UIScreen.main.bounds.width - 5 * 14) / 4
 
     var body: some View {
-        Button(action: action) {
-            ZStack {
-                RoundedRectangle(cornerRadius: buttonSize / 2)
-                    .fill(button.backgroundColor)
-                    .frame(
-                        width: button.isWide ? buttonSize * 2 + 14 : buttonSize,
-                        height: buttonSize
-                    )
-                Text(button.displayTitle)
-                    .font(.system(size: 32, weight: .regular))
-                    .foregroundColor(button.foregroundColor)
-                    .frame(
-                        maxWidth: .infinity,
-                        alignment: button.isWide ? .leading : .center
-                    )
-                    .padding(.leading, button.isWide ? 36 : 0)
-            }
+        ZStack {
+            RoundedRectangle(cornerRadius: buttonSize / 2)
+                .fill(button.backgroundColor)
+                .frame(
+                    width: button.isWide ? buttonSize * 2 + 14 : buttonSize,
+                    height: buttonSize
+                )
+            Text(button.displayTitle)
+                .font(.system(size: 32, weight: .regular))
+                .foregroundColor(button.foregroundColor)
+                .frame(
+                    maxWidth: .infinity,
+                    alignment: button.isWide ? .leading : .center
+                )
+                .padding(.leading, button.isWide ? 36 : 0)
         }
+        .opacity(isPressed ? 0.6 : 1.0)
         .frame(
             width: button.isWide ? buttonSize * 2 + 14 : buttonSize,
             height: buttonSize
         )
-        .buttonStyle(.plain)
+        .onTapGesture {
+            action()
+        }
+        .onLongPressGesture(minimumDuration: 0.8) {
+            if let longAction = longPressAction {
+                longAction()
+            } else {
+                action()
+            }
+        } onPressingChanged: { pressing in
+            withAnimation(.easeInOut(duration: 0.1)) {
+                isPressed = pressing
+            }
+        }
     }
 }
