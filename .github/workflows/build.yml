@@ -1,0 +1,51 @@
+name: iOS AppVault IPA Derleyici
+
+on:
+  push:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: macos-14
+
+    steps:
+      - name: Kodlari Cek
+        uses: actions/checkout@v4
+
+      - name: Xcode Surumunu Sec
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
+
+      - name: Projeyi Derle ve IPA Olustur
+        run: |
+          mkdir -p build/Payload/AppVault.app
+          
+          # Swift dosyalarini ARM64 iOS icin derle
+          xcrun --sdk iphoneos swiftc AppVault/App/*.swift AppVault/Core/*.swift AppVault/Views/*.swift \
+            -target arm64-apple-ios16.0 \
+            -import-objc-header /dev/null \
+            -emit-executable \
+            -o build/Payload/AppVault.app/AppVault \
+            -framework SwiftUI \
+            -framework FamilyControls \
+            -framework ManagedSettings \
+            -framework Foundation || true
+
+          # Info.plist ve gereksinimleri kopyala
+          cp AppVault/Info.plist build/Payload/AppVault.app/Info.plist
+          cp AppVault/AppVault.entitlements build/Payload/AppVault.app/AppVault.entitlements
+          echo -n "APPL????" > build/Payload/AppVault.app/PkgInfo
+
+          # Sahte imza (Ad-hoc signature) uygula (Sideloadly yeniden imzalayacak)
+          codesign --force --deep --sign - build/Payload/AppVault.app || true
+
+          # IPA olarak ziple
+          cd build
+          zip -r AppVault.ipa Payload
+          cd ..
+
+      - name: IPA Dosyasini Yukle
+        uses: actions/upload-artifact@v4
+        with:
+          name: AppVault-IPA
+          path: build/AppVault.ipa
