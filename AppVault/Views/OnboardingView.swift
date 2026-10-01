@@ -27,7 +27,7 @@ struct OnboardingView: View {
                     Image(systemName: currentStep == 0 ? "lock.shield.fill" : "checkmark.shield.fill")
                         .font(.system(size: 64))
                         .foregroundStyle(themeManager.accentColor)
-                        .symbolEffect(.bounce, value: currentStep)
+                        
                 }
                 .padding(.bottom, 40)
 
