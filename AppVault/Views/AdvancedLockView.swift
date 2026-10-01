@@ -11,7 +11,7 @@ struct AdvancedLockView: View {
     @State private var selectedApp: LockedAppConfig? = nil
     @State private var showScheduleEditor = false
 
-    var descriptionText: some View {
+    var body: some View {
         ZStack {
             LinearGradient(colors: themeManager.backgroundGradient,
                            startPoint: .top, endPoint: .bottom)
@@ -142,7 +142,7 @@ struct ScheduleAppRow: View {
     @Binding var config: LockedAppConfig
     let onEdit: () -> Void
 
-    var descriptionText: some View {
+    var body: some View {
         HStack(spacing: 14) {
             ZStack {
                 RoundedRectangle(cornerRadius: 11)
@@ -216,7 +216,7 @@ struct ScheduleEditorView: View {
         _unlockTime = State(initialValue: cal.date(from: uComps) ?? Date())
     }
 
-    var descriptionText: some View {
+    var body: some View {
         NavigationView {
             ZStack {
                 LinearGradient(colors: themeManager.backgroundGradient,
@@ -351,7 +351,7 @@ struct AdvancedOptionRow<D: View>: View {
     let subtitle: String
     let destination: D
 
-    var descriptionText: some View {
+    var body: some View {
         NavigationLink(destination: destination) {
             HStack(spacing: 14) {
                 ZStack {
@@ -387,7 +387,7 @@ struct AutoLockTimerView: View {
     @State private var selectedMinutes = 5
     let options = [1, 2, 5, 10, 15, 30, 60]
 
-    var descriptionText: some View {
+    var body: some View {
         ZStack {
             LinearGradient(colors: themeManager.backgroundGradient, startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
@@ -427,7 +427,7 @@ struct NotificationSettingsView: View {
     @State private var notifOn = true
     @State private var vibOn = true
 
-    var descriptionText: some View {
+    var body: some View {
         ZStack {
             LinearGradient(colors: themeManager.backgroundGradient, startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
@@ -461,7 +461,7 @@ struct StealthModeView: View {
     @EnvironmentObject var themeManager: ThemeManager
     @State private var stealthOn = false
 
-    var descriptionText: some View {
+    var body: some View {
         ZStack {
             LinearGradient(colors: themeManager.backgroundGradient, startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
