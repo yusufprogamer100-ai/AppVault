@@ -2,67 +2,112 @@ import Foundation
 import FamilyControls
 import ManagedSettings
 
-enum LockMethod: String, CaseIterable, Identifiable {
-    case zeroResponse = "1. Yöntem: Sıfır Tepki (Hiç Açılmaz)"
-    case fakeCrash = "2. Yöntem: Sahte Çökme (Açılır gibi olup kapanır)"
-    
-    var id: String { self.rawValue }
+enum LockMethod: String, CaseIterable, Identifiable, Codable {
+    case zeroResponse = "Sifir Tepki"
+    case fakeCrash = "Sahte Cokme"
+    var id: String { rawValue }
+
+    var displayName: String {
+        switch self {
+        case .zeroResponse: return "Sıfır Tepki (Hiç Açılmaz)"
+        case .fakeCrash: return "Sahte Çökme"
+        }
+    }
+    var icon: String {
+        switch self {
+        case .zeroResponse: return "hand.raised.slash"
+        case .fakeCrash: return "xmark.octagon"
+        }
+    }
 }
 
-struct AppCustomization: Identifiable, Codable {
+struct LockedAppConfig: Identifiable, Codable {
     var id: String
-    var originalName: String
+    var displayName: String
     var disguisedName: String
-    var disguisedIconName: String
-    var lockMethod: String
+    var disguisedIconSystemName: String
+    var lockMethod: LockMethod
+    var isEnabled: Bool
+
+    init(id: String = UUID().uuidString,
+         displayName: String,
+         disguisedName: String = "",
+         disguisedIconSystemName: String = "questionmark.app",
+         lockMethod: LockMethod = .zeroResponse,
+         isEnabled: Bool = true) {
+        self.id = id
+        self.displayName = displayName
+        self.disguisedName = disguisedName
+        self.disguisedIconSystemName = disguisedIconSystemName
+        self.lockMethod = lockMethod
+        self.isEnabled = isEnabled
+    }
 }
 
 @MainActor
 class LockManager: ObservableObject {
     static let shared = LockManager()
-    
+
     private let store = ManagedSettingsStore()
-    
+
     @Published var activitySelection = FamilyActivitySelection()
     @Published var isAuthorized: Bool = false
     @Published var isShieldActive: Bool = false
-    
-    // Özelleştirilen uygulamaların listesi (Ad, İkon, Kilit Türü)
-    @Published var customConfigurations: [String: AppCustomization] = [:]
-    
+    @Published var lockedApps: [LockedAppConfig] = []
+
     init() {
-        // Başlangıçta yetki durumunu kontrol et
         self.isAuthorized = AuthorizationCenter.shared.authorizationStatus == .approved
+        loadLockedApps()
     }
-    
-    // Apple Screen Time / FamilyControls izni iste
+
     func requestAuthorization() async {
         do {
             try await AuthorizationCenter.shared.requestAuthorization(for: .individual)
             self.isAuthorized = (AuthorizationCenter.shared.authorizationStatus == .approved)
         } catch {
-            print("Screen Time Yetki Hatası: \(error.localizedDescription)")
             self.isAuthorized = false
         }
     }
-    
-    // Uygulamaları kilitle (1. Yöntem: Sıfır Tepki Shield)
+
     func lockApplications() {
         let tokens = activitySelection.applicationTokens
-        guard !tokens.isEmpty else {
-            store.shield.applications = nil
-            isShieldActive = false
-            return
-        }
-        
-        // ManagedSettingsStore ile uygulamaların önüne tam perde çekiyoruz
+        guard !tokens.isEmpty else { return }
         store.shield.applications = tokens
         self.isShieldActive = true
     }
-    
-    // Kilitleri kaldır
+
     func unlockApplications() {
         store.shield.applications = nil
         self.isShieldActive = false
+    }
+
+    func addLockedApp(_ config: LockedAppConfig) {
+        lockedApps.append(config)
+        saveLockedApps()
+    }
+
+    func removeLockedApp(at offsets: IndexSet) {
+        lockedApps.remove(atOffsets: offsets)
+        saveLockedApps()
+    }
+
+    func updateLockedApp(_ config: LockedAppConfig) {
+        if let idx = lockedApps.firstIndex(where: { $0.id == config.id }) {
+            lockedApps[idx] = config
+            saveLockedApps()
+        }
+    }
+
+    private func saveLockedApps() {
+        if let data = try? JSONEncoder().encode(lockedApps) {
+            UserDefaults.standard.set(data, forKey: "locked_apps")
+        }
+    }
+
+    private func loadLockedApps() {
+        if let data = UserDefaults.standard.data(forKey: "locked_apps"),
+           let apps = try? JSONDecoder().decode([LockedAppConfig].self, from: data) {
+            lockedApps = apps
+        }
     }
 }

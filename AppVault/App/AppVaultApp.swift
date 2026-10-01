@@ -5,18 +5,24 @@ import FamilyControls
 struct AppVaultApp: App {
     @StateObject private var securityManager = SecurityManager.shared
     @StateObject private var lockManager = LockManager.shared
-    
+    @StateObject private var themeManager = ThemeManager.shared
+
     var body: some Scene {
         WindowGroup {
-            if securityManager.isUnlocked {
-                MainDashboardView()
-                    .environmentObject(securityManager)
-                    .environmentObject(lockManager)
-            } else {
-                PasscodeView(title: "Güvenli Kasa", subtitle: "Devam etmek için 4 haneli PIN girin") {
-                    securityManager.isUnlocked = true
+            Group {
+                if securityManager.isUnlocked {
+                    ContentRootView()
+                        .environmentObject(securityManager)
+                        .environmentObject(lockManager)
+                        .environmentObject(themeManager)
+                } else {
+                    CalculatorView()
+                        .environmentObject(securityManager)
+                        .environmentObject(themeManager)
                 }
             }
+            .preferredColorScheme(themeManager.colorScheme)
+            .tint(themeManager.accentColor)
         }
     }
 }

@@ -1,19 +1,28 @@
 import Foundation
+import FamilyControls
 
 class SecurityManager: ObservableObject {
     static let shared = SecurityManager()
-    
-    @Published var savedPin: String = "0000"
+
     @Published var isUnlocked: Bool = false
-    
-    // Uygulama giriş PIN kontrolü
+
+    private let pinKey = "app_vault_pin"
+
+    var savedPin: String {
+        get { UserDefaults.standard.string(forKey: pinKey) ?? "0000" }
+        set { UserDefaults.standard.set(newValue, forKey: pinKey) }
+    }
+
     func verifyPin(_ pin: String) -> Bool {
         return pin == savedPin
     }
-    
-    // PIN güncelleme
-    func changePin(newPin: String) {
+
+    func changePin(to newPin: String) {
         guard newPin.count == 4 else { return }
-        self.savedPin = newPin
+        savedPin = newPin
+    }
+
+    func lock() {
+        isUnlocked = false
     }
 }
