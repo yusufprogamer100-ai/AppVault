@@ -72,7 +72,7 @@ struct LockedAppsView: View {
                             EmptyLockedAppsView()
                         } else {
                             VStack(alignment: .leading, spacing: 10) {
-                                SectionHeader(title: "KİLİTLİ UYGULAMALAR (\(lockManager.lockedApps.count))")
+                                CustomSectionHeader(title: "KİLİTLİ UYGULAMALAR (\(lockManager.lockedApps.count))")
 
                                 ForEach(lockManager.lockedApps) { app in
                                     LockedAppRow(
@@ -205,7 +205,7 @@ struct MasterLockPanel: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            SectionHeader(title: "MASTER KİLİT")
+            CustomSectionHeader(title: "MASTER KİLİT")
 
             // Shield Kilidi
             HStack(spacing: 14) {
@@ -406,15 +406,4 @@ struct EmptyLockedAppsView: View {
     }
 }
 
-// MARK: - Bölüm Başlığı
-struct SectionHeader: View {
-    let title: String
-    var body: some View {
-        Text(title)
-            .font(.caption)
-            .fontWeight(.semibold)
-            .foregroundColor(.white.opacity(0.38))
-            .frame(maxWidth: .infinity, alignment: .leading)
-            .padding(.leading, 4)
-    }
-}
+

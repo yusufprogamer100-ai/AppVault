@@ -30,7 +30,7 @@ struct AdvancedLockView: View {
 
                     // MARK: Global Kısıtlama Anahtarı
                     VStack(spacing: 10) {
-                        SectionHeader(title: "MASTER GELİŞMİŞ KİLİTLEME")
+                        CustomSectionHeader(title: "MASTER GELİŞMİŞ KİLİTLEME")
 
                         HStack(spacing: 14) {
                             ZStack {
@@ -69,7 +69,7 @@ struct AdvancedLockView: View {
                     // MARK: Uygulama Bazlı Zaman Çizelgesi
                     if !lockManager.lockedApps.isEmpty {
                         VStack(spacing: 10) {
-                            SectionHeader(title: "UYGULAMA BAZLI ZAMAN ÇİZELGESİ")
+                            CustomSectionHeader(title: "UYGULAMA BAZLI ZAMAN ÇİZELGESİ")
 
                             ForEach($lockManager.lockedApps) { $app in
                                 ScheduleAppRow(config: $app, onEdit: {
@@ -82,7 +82,7 @@ struct AdvancedLockView: View {
 
                     // MARK: Güvenlik Ayarları
                     VStack(spacing: 10) {
-                        SectionHeader(title: "GELİŞMİŞ SEÇENEKLER")
+                        CustomSectionHeader(title: "GELİŞMİŞ SEÇENEKLER")
 
                         VStack(spacing: 0) {
                             AdvancedOptionRow(
@@ -138,6 +138,7 @@ struct AdvancedLockView: View {
 // MARK: - Zaman Çizelgesi Uygulama Satırı
 struct ScheduleAppRow: View {
     @EnvironmentObject var themeManager: ThemeManager
+    @EnvironmentObject var lockManager: LockManager
     @Binding var config: LockedAppConfig
     let onEdit: () -> Void
 
@@ -391,7 +392,7 @@ struct AutoLockTimerView: View {
             LinearGradient(colors: themeManager.backgroundGradient, startPoint: .top, endPoint: .bottom)
                 .ignoresSafeArea()
             VStack(spacing: 20) {
-                SectionHeader(title: "OTOMATİK KİLİT SÜRESİ")
+                CustomSectionHeader(title: "OTOMATİK KİLİT SÜRESİ")
                     .padding(.horizontal, 18)
                 ForEach(options, id: \.self) { min in
                     Button(action: { selectedMinutes = min }) {

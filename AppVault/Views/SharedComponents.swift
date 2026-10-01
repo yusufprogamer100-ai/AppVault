@@ -1,7 +1,7 @@
 import SwiftUI
 
 // MARK: - Ortak Bölüm Başlığı
-struct SectionHeader: View {
+struct CustomSectionHeader: View {
     let title: String
     var body: some View {
         Text(title)
@@ -52,7 +52,7 @@ struct CardSection<Content: View>: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 10) {
-            SectionHeader(title: title)
+            CustomSectionHeader(title: title)
             VStack(spacing: 0) { content }
                 .padding(16)
                 .background(themeManager.cardBackground)

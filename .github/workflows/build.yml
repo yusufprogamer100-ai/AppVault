@@ -35,6 +35,7 @@ jobs:
             -framework SwiftUI \
             -framework FamilyControls \
             -framework ManagedSettings \
+            -framework DeviceActivity \
             -framework Foundation
 
           # Binary'nin gercekten olustugunu dogrula
