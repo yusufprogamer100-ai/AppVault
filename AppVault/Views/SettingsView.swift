@@ -7,7 +7,6 @@ struct SettingsView: View {
 
     @State private var showChangePinSheet = false
     @State private var showPinVerify = false
-    @State private var aboutExpanded = false
 
     var body: some View {
         NavigationView {
@@ -115,7 +114,7 @@ struct SettingsView: View {
                         // MARK: Hakkında
                         CardSection(title: "HAKKINDA") {
                             VStack(spacing: 12) {
-                                InfoRow(label: "Versiyon", value: "1.0.0")
+                                InfoRow(label: "Versiyon", value: "2.0.0")
                                 Divider().background(Color.white.opacity(0.08))
                                 InfoRow(label: "Geliştirici", value: "AppVault Team")
                                 Divider().background(Color.white.opacity(0.08))
@@ -145,53 +144,6 @@ struct SettingsView: View {
     }
 }
 
-struct SettingsRow: View {
-    let icon: String
-    let iconColor: Color
-    let title: String
-    let action: () -> Void
-
-    var body: some View {
-        Button(action: action) {
-            HStack(spacing: 14) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: 9)
-                        .fill(iconColor.opacity(0.2))
-                        .frame(width: 36, height: 36)
-                    Image(systemName: icon)
-                        .font(.system(size: 16))
-                        .foregroundColor(iconColor)
-                }
-                Text(title)
-                    .font(.subheadline)
-                    .foregroundColor(.white)
-                Spacer()
-                Image(systemName: "chevron.right")
-                    .font(.caption)
-                    .foregroundColor(.white.opacity(0.3))
-            }
-            .padding(.vertical, 8)
-        }
-    }
-}
-
-struct InfoRow: View {
-    let label: String
-    let value: String
-
-    var body: some View {
-        HStack {
-            Text(label)
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.6))
-            Spacer()
-            Text(value)
-                .font(.subheadline)
-                .foregroundColor(.white)
-        }
-    }
-}
-
 struct ChangePinView: View {
     @EnvironmentObject var securityManager: SecurityManager
     @EnvironmentObject var themeManager: ThemeManager
@@ -210,7 +162,7 @@ struct ChangePinView: View {
                 title: step == 0 ? "Yeni PIN Gir" : "Tekrar Gir",
                 subtitle: step == 0 ? "4 haneli yeni PIN'ini belirle" : "Aynı PIN'i tekrar gir",
                 onUnlockSuccess: {
-                    // Bu PIN değiştirme akışında bu çağrılmayacak
+                    // Bu PIN değiştirme akışında bu çağrılmayacak (PasscodeView bu akış için uygun değil, ama placeholder olarak kalsın)
                 }
             )
             .environmentObject(securityManager)

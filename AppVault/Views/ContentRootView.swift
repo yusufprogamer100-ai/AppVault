@@ -1,6 +1,7 @@
 import SwiftUI
 
 struct ContentRootView: View {
+    @EnvironmentObject var securityManager: SecurityManager
     @EnvironmentObject var lockManager: LockManager
     @EnvironmentObject var themeManager: ThemeManager
     @State private var showOnboarding = !UserDefaults.standard.bool(forKey: "onboarding_done")
@@ -8,28 +9,32 @@ struct ContentRootView: View {
 
     var body: some View {
         ZStack {
-            // Arka Plan Gradyanı
-            LinearGradient(
-                colors: themeManager.backgroundGradient,
-                startPoint: .top,
-                endPoint: .bottom
-            )
-            .ignoresSafeArea()
+            LinearGradient(colors: themeManager.backgroundGradient,
+                           startPoint: .top, endPoint: .bottom)
+                .ignoresSafeArea()
 
             if showOnboarding {
-                OnboardingView(onComplete: {
+                OnboardingView {
                     UserDefaults.standard.set(true, forKey: "onboarding_done")
                     withAnimation(.spring()) { showOnboarding = false }
-                })
+                }
+                .environmentObject(lockManager)
+                .environmentObject(themeManager)
             } else {
                 TabView(selection: $selectedTab) {
                     LockedAppsView()
+                        .environmentObject(securityManager)
+                        .environmentObject(lockManager)
+                        .environmentObject(themeManager)
                         .tabItem {
                             Label("Kilitli", systemImage: selectedTab == 0 ? "lock.shield.fill" : "lock.shield")
                         }
                         .tag(0)
 
                     SettingsView()
+                        .environmentObject(securityManager)
+                        .environmentObject(lockManager)
+                        .environmentObject(themeManager)
                         .tabItem {
                             Label("Ayarlar", systemImage: selectedTab == 1 ? "gearshape.2.fill" : "gearshape.2")
                         }

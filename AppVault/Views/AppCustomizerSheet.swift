@@ -98,7 +98,7 @@ struct AppCustomizerSheet: View {
                                             Text(method.displayName)
                                                 .font(.subheadline).fontWeight(.medium)
                                                 .foregroundColor(.white)
-                                            Text(method == .zeroResponse ? "Uygulamaya basıldığında hiç tepki vermez" : "Açılır gibi yapıp hemen kapanır")
+                                            Text(method.description)
                                                 .font(.caption)
                                                 .foregroundColor(.white.opacity(0.4))
                                         }
@@ -155,50 +155,5 @@ struct AppCustomizerSheet: View {
             }
         }
         .navigationViewStyle(.stack)
-    }
-}
-
-// MARK: Yardımcı Bileşenler
-struct CardSection<Content: View>: View {
-    @EnvironmentObject var themeManager: ThemeManager
-    let title: String
-    @ViewBuilder let content: Content
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 12) {
-            Text(title)
-                .font(.caption)
-                .fontWeight(.semibold)
-                .foregroundColor(.white.opacity(0.4))
-                .padding(.leading, 4)
-
-            VStack(spacing: 0) {
-                content
-            }
-            .padding(16)
-            .background(themeManager.cardBackground)
-            .cornerRadius(16)
-            .overlay(RoundedRectangle(cornerRadius: 16).stroke(Color.white.opacity(0.07), lineWidth: 1))
-        }
-    }
-}
-
-struct CustomTextField: View {
-    let label: String
-    @Binding var text: String
-    var placeholder: String = ""
-
-    var body: some View {
-        HStack {
-            Text(label)
-                .font(.subheadline)
-                .foregroundColor(.white.opacity(0.6))
-                .frame(width: 140, alignment: .leading)
-            TextField(placeholder.isEmpty ? label : placeholder, text: $text)
-                .font(.subheadline)
-                .foregroundColor(.white)
-                .multilineTextAlignment(.trailing)
-        }
-        .padding(.vertical, 4)
     }
 }
