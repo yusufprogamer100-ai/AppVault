@@ -608,8 +608,8 @@ static void DrawMenu() {
     // Fade / scale window via SetNextWindow* before Begin
     ImGui::SetNextWindowBgAlpha(UI::s_MenuAlpha * UI::s_Opacity);
     ImVec2 center = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
-    ImGui::SetNextWindowPos(center, ImGuiCond_Once, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(420, 520), ImGuiCond_Once);
+    ImGui::SetNextWindowPos(center, ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
+    ImGui::SetNextWindowSize(ImVec2(440, 310), ImGuiCond_FirstUseEver);
 
     // Dock mode: tiny floating button
     if (UI::s_DockMode) {
@@ -668,24 +668,26 @@ static void DrawMenu() {
 }
 
 // ============================================================
-#pragma mark - Metal Render Hook (presentDrawable)
+#pragma mark - Metal Layer Hook
 // ============================================================
-// Intercept -[MTLCommandBuffer presentDrawable:] on _MTLCommandBuffer.
-// This executes AFTER Roblox completes rendering the game frame,
-// rendering ImGui on top without drawable contention or race conditions.
+// Hook -[CAMetalLayer nextDrawable] to render ImGui overlay on each frame.
+// Texture is assigned to descriptor before NewFrame to prevent pipeline assertion.
 // ============================================================
 
+static id<CAMetalDrawable> (*orig_nextDrawable)(CAMetalLayer *, SEL) = nullptr;
 static id<MTLDevice>         g_Device        = nullptr;
+static id<MTLCommandQueue>   g_Queue         = nullptr;
 static MTLRenderPassDescriptor *g_RPD        = nullptr;
 static bool                  g_ImGuiReady    = false;
 static CFTimeInterval        g_LastTime      = 0;
-static __unsafe_unretained id<MTLDrawable> g_LastRenderedDrawable = nil;
 
-static void InitImGui(id<MTLDevice> device) {
+static void InitImGui(CAMetalLayer *layer) {
     if (g_ImGuiReady) return;
 
-    g_Device = device ?: MTLCreateSystemDefaultDevice();
+    g_Device = layer.device ?: MTLCreateSystemDefaultDevice();
     if (!g_Device) return;
+
+    g_Queue = [g_Device newCommandQueue];
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -706,19 +708,13 @@ static void InitImGui(id<MTLDevice> device) {
     NSLog(@"[LARPTool] ImGui Metal backend initialized ✓");
 }
 
-static void RenderImGuiOverlay(id<MTLCommandBuffer> cmdBuf, id<MTLDrawable> drawable) {
-    if (!drawable || drawable == g_LastRenderedDrawable) return;
-    if (![drawable conformsToProtocol:@protocol(CAMetalDrawable)]) return;
-
-    id<CAMetalDrawable> metalDrawable = (id<CAMetalDrawable>)drawable;
-    id<MTLTexture> texture = metalDrawable.texture;
-    if (!texture) return;
-
-    g_LastRenderedDrawable = drawable;
+static id<CAMetalDrawable> hooked_nextDrawable(CAMetalLayer *self, SEL _cmd) {
+    id<CAMetalDrawable> drawable = orig_nextDrawable(self, _cmd);
+    if (!drawable) return drawable;
 
     @autoreleasepool {
-        InitImGui(cmdBuf.device);
-        if (!g_ImGuiReady) return;
+        InitImGui(self);
+        if (!g_ImGuiReady) return drawable;
 
         CFTimeInterval now = CACurrentMediaTime();
         float dt = (float)(now - g_LastTime);
@@ -728,107 +724,82 @@ static void RenderImGuiOverlay(id<MTLCommandBuffer> cmdBuf, id<MTLDrawable> draw
         UI::Tick(dt);
 
         if (UI::s_MenuAlpha > 0.001f) {
-            // Set frame texture on descriptor BEFORE ImGui_ImplMetal_NewFrame
-            g_RPD.colorAttachments[0].texture = texture;
+            id<MTLTexture> texture = drawable.texture;
+            if (texture) {
+                // CRITICAL: Set texture BEFORE ImGui_ImplMetal_NewFrame
+                g_RPD.colorAttachments[0].texture = texture;
 
-            ImGuiIO &io = ImGui::GetIO();
-            io.DeltaTime = dt;
+                ImGuiIO &io = ImGui::GetIO();
+                io.DeltaTime = dt;
 
-            ImGui_ImplMetal_NewFrame(g_RPD);
-            ImGui_ImplUIKit_NewFrame();
-            ImGui::NewFrame();
+                // Sync orientation with texture dimensions (Roblox landscape)
+                CGSize sz = [UIScreen mainScreen].bounds.size;
+                if ((texture.width > texture.height && sz.width < sz.height) ||
+                    (texture.width < texture.height && sz.width > sz.height)) {
+                    CGFloat tmp = sz.width; sz.width = sz.height; sz.height = tmp;
+                }
+                io.DisplaySize = ImVec2((float)sz.width, (float)sz.height);
+                io.DisplayFramebufferScale = ImVec2(
+                    (float)texture.width / (float)sz.width,
+                    (float)texture.height / (float)sz.height
+                );
 
-            DrawMenu();
+                ImGui_ImplMetal_NewFrame(g_RPD);
+                ImGui_ImplUIKit_NewFrame();
+                // Ensure orientation is preserved after UIKit NewFrame
+                io.DisplaySize = ImVec2((float)sz.width, (float)sz.height);
+                io.DisplayFramebufferScale = ImVec2(
+                    (float)texture.width / (float)sz.width,
+                    (float)texture.height / (float)sz.height
+                );
 
-            ImGui::Render();
+                ImGui::NewFrame();
+                DrawMenu();
+                ImGui::Render();
 
-            id<MTLRenderCommandEncoder> enc = nil;
-            @try {
-                enc = [cmdBuf renderCommandEncoderWithDescriptor:g_RPD];
-            } @catch (NSException *ex) {
-                enc = nil;
-            }
-
-            if (enc) {
-                [enc pushDebugGroup:@"LARPTool::ImGui"];
-                ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), cmdBuf, enc);
-                [enc popDebugGroup];
-                [enc endEncoding];
-            } else if (cmdBuf.commandQueue) {
-                id<MTLCommandBuffer> fallbackBuf = [cmdBuf.commandQueue commandBuffer];
-                if (fallbackBuf) {
-                    id<MTLRenderCommandEncoder> fEnc = [fallbackBuf renderCommandEncoderWithDescriptor:g_RPD];
-                    if (fEnc) {
-                        [fEnc pushDebugGroup:@"LARPTool::ImGui"];
-                        ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), fallbackBuf, fEnc);
-                        [fEnc popDebugGroup];
-                        [fEnc endEncoding];
+                id<MTLCommandBuffer> cmdBuf = [g_Queue commandBuffer];
+                if (cmdBuf) {
+                    id<MTLRenderCommandEncoder> enc =
+                        [cmdBuf renderCommandEncoderWithDescriptor:g_RPD];
+                    if (enc) {
+                        [enc pushDebugGroup:@"LARPTool::ImGui"];
+                        ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), cmdBuf, enc);
+                        [enc popDebugGroup];
+                        [enc endEncoding];
                     }
-                    [fallbackBuf commit];
-                    [fallbackBuf waitUntilScheduled];
+                    [cmdBuf commit];
+                    [cmdBuf waitUntilScheduled];
                 }
             }
         }
     }
+    return drawable;
 }
-
-@interface _MTLCommandBuffer : NSObject
-- (void)presentDrawable:(id<MTLDrawable>)drawable;
-- (void)presentDrawable:(id<MTLDrawable>)drawable afterMinimumDuration:(CFTimeInterval)duration;
-@end
-
-%hook _MTLCommandBuffer
-
-- (void)presentDrawable:(id<MTLDrawable>)drawable {
-    RenderImGuiOverlay((id<MTLCommandBuffer>)self, drawable);
-    %orig(drawable);
-}
-
-- (void)presentDrawable:(id<MTLDrawable>)drawable afterMinimumDuration:(CFTimeInterval)duration {
-    RenderImGuiOverlay((id<MTLCommandBuffer>)self, drawable);
-    %orig(drawable, duration);
-}
-
-%end
 
 
 // ============================================================
-#pragma mark - Touch Trigger Zone (Bottom-Left) & Watermark
+#pragma mark - Touch Trigger Zone (Bottom-Left, Invisible) & Watermark
 // ============================================================
 
 @interface LARPTriggerView : UIView
 @end
 
-@implementation LARPTriggerView {
-    UILabel *_badgeLabel;
-}
+@implementation LARPTriggerView
 
 - (instancetype)initAtBottomLeft {
     CGRect screen = [UIScreen mainScreen].bounds;
-    // 55x55 px at bottom-left corner with 20px padding from edges
-    CGFloat size = 55.0f;
-    CGFloat x = 15.0f;
-    CGFloat y = screen.size.height - size - 25.0f;
+    CGFloat size = 75.0f;
+    CGFloat x = 0.0f;
+    CGFloat y = screen.size.height - size;
 
     CGRect frame = CGRectMake(x, y, size, size);
     self = [super initWithFrame:frame];
     if (self) {
-        // Distinct semi-transparent dark circle with subtle blue border
-        self.backgroundColor = [UIColor colorWithRed:0.07f green:0.07f blue:0.09f alpha:0.75f];
-        self.layer.cornerRadius = size / 2.0f;
-        self.layer.borderWidth = 1.5f;
-        self.layer.borderColor = [UIColor colorWithRed:0.0f green:0.52f blue:0.87f alpha:0.8f].CGColor;
-        self.layer.masksToBounds = YES;
+        // Completely invisible touch trigger per user request
+        self.backgroundColor = [UIColor clearColor];
+        self.layer.borderWidth = 0.0f;
         self.userInteractionEnabled = YES;
         self.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleRightMargin;
-
-        _badgeLabel = [[UILabel alloc] initWithFrame:self.bounds];
-        _badgeLabel.text = @"LT";
-        _badgeLabel.textColor = [UIColor whiteColor];
-        _badgeLabel.font = [UIFont boldSystemFontOfSize:14.0f];
-        _badgeLabel.textAlignment = NSTextAlignmentCenter;
-        _badgeLabel.userInteractionEnabled = NO;
-        [self addSubview:_badgeLabel];
 
         UITapGestureRecognizer *tap =
             [[UITapGestureRecognizer alloc]
@@ -840,11 +811,28 @@ static void RenderImGuiOverlay(id<MTLCommandBuffer> cmdBuf, id<MTLDrawable> draw
     return self;
 }
 
+- (void)didMoveToSuperview {
+    [super didMoveToSuperview];
+    [self updateLayout];
+}
+
+- (void)updateLayout {
+    if (!self.superview) return;
+    CGFloat size = 75.0f;
+    CGRect bounds = self.superview.bounds;
+    self.frame = CGRectMake(0.0f, bounds.size.height - size, size, size);
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    [self updateLayout];
+}
+
 - (void)handleTap:(UITapGestureRecognizer *)gr {
     UI::s_MenuOpen = !UI::s_MenuOpen;
-    // Haptic feedback
+    NSLog(@"[LARPTool] Trigger tapped! MenuOpen is now: %d", (int)UI::s_MenuOpen);
     if (@available(iOS 10.0, *)) {
-        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleHeavy];
         [gen impactOccurred];
     }
 }
@@ -944,7 +932,7 @@ static void AttachOverlayToWindow(UIWindow *w) {
                      touch.phase == UITouchPhaseCancelled)
                 io.AddMouseButtonEvent(0, false);
         }
-        if (io.WantCaptureMouse) return; // swallow
+        if (UI::s_MenuOpen && UI::s_MenuAlpha > 0.05f && io.WantCaptureMouse) return; // swallow
     }
     %orig;
 }
@@ -984,10 +972,20 @@ static void OnAppBecameActive(CFNotificationCenterRef center, void *observer, CF
         // 1. Resolve Roblox memory layout
         Memory::RobloxABI::Resolve();
 
-        // 2. Initialize Logos hooks (_MTLCommandBuffer, UIWindow, UIApplication)
+        // 2. Hook CAMetalLayer nextDrawable
+        Class metalLayerClass = NSClassFromString(@"CAMetalLayer");
+        SEL nextDrawableSel = @selector(nextDrawable);
+        Method m = class_getInstanceMethod(metalLayerClass, nextDrawableSel);
+        if (m) {
+            orig_nextDrawable = (id<CAMetalDrawable>(*)(CAMetalLayer *, SEL))method_getImplementation(m);
+            method_setImplementation(m, (IMP)hooked_nextDrawable);
+            NSLog(@"[LARPTool] CAMetalLayer::nextDrawable hooked ✓");
+        }
+
+        // 3. Initialize Logos hooks (UIWindow, UIApplication)
         %init;
 
-        // 3. Listen for app became active as guaranteed trigger attachment
+        // 4. Listen for app became active as guaranteed trigger attachment
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetLocalCenter(),
             nullptr,
@@ -997,7 +995,7 @@ static void OnAppBecameActive(CFNotificationCenterRef center, void *observer, CF
             CFNotificationSuspensionBehaviorDeliverImmediately
         );
 
-        NSLog(@"[LARPTool] Fully loaded. Watermark 'made by chayoo077' and Bottom-Left trigger button armed.");
+        NSLog(@"[LARPTool] Fully loaded. Watermark 'made by chayoo077' and invisible Bottom-Left trigger armed.");
     }
 }
 
