@@ -38,10 +38,16 @@ jobs:
           cp -r /tmp/theos-sdks/iPhoneOS*.sdk /opt/theos/sdks/ || true
           rm -rf /tmp/theos-sdks
 
+      - name: Install ldid and Theos dependencies
+        run: |
+          brew install ldid || true
+          echo "ldid path: $(which ldid || true)"
+
       - name: Set Theos env
         run: |
           echo "THEOS=/opt/theos" >> "$GITHUB_ENV"
           echo "/opt/theos/bin"   >> "$GITHUB_PATH"
+
 
       - name: Create Dobby stub
         run: |
