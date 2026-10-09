@@ -58,22 +58,25 @@ jobs:
           echo "THEOS=/opt/theos" >> "$GITHUB_ENV"
           echo "/opt/theos/bin"   >> "$GITHUB_PATH"
 
-      - name: Build and install Dobby
+      - name: Install Dobby arm64
         run: |
           set -euo pipefail
           mkdir -p /opt/theos/lib /opt/theos/include
+          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu || true
           git clone --depth=1 https://github.com/jmpews/Dobby /tmp/Dobby-src
           cmake -S /tmp/Dobby-src -B /tmp/Dobby-build \
                 -DCMAKE_BUILD_TYPE=Release \
-                -DCMAKE_SYSTEM_NAME=iOS \
-                -DCMAKE_OSX_ARCHITECTURES=arm64 \
-                -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+                -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
+                -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
+                -DCMAKE_SYSTEM_NAME=Linux \
+                -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
                 -DPlugin.DobbyInstrument=ON \
                 -DDOBBY_DEBUG=OFF \
                 -G Ninja
           cmake --build /tmp/Dobby-build --config Release -j$(nproc)
           find /tmp/Dobby-build -name "*.a" | head -1 | xargs -I{} cp {} /opt/theos/lib/libdobby.a
           cp /tmp/Dobby-src/include/dobby.h /opt/theos/include/dobby.h
+          echo "Dobby: $(ls -lh /opt/theos/lib/libdobby.a)"
 
       - name: Vendor ImGui
         run: |
