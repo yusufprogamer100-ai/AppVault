@@ -1,0 +1,261 @@
+name: LARPTool – Build & Release
+
+on:
+  push:
+    branches: [ main, master ]
+    tags:     [ 'v*' ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+env:
+  # ── Theos / SDK versions (bump here when upstream updates) ────────────────
+  THEOS_VERSION:  "3.4.0"
+  SDK_VERSION:    "17.5"
+  THEOS_REPO:     "https://github.com/theos/theos"
+  SDKS_REPO:      "https://github.com/theos/sdks"
+  DOBBY_VERSION:  "1.0.0"
+
+jobs:
+  # ════════════════════════════════════════════════════════════════════════════
+  build:
+  # ════════════════════════════════════════════════════════════════════════════
+    name: Build LARPTool.dylib
+    runs-on: ubuntu-latest          # macOS runner is faster for Metal but costs
+                                    # more; ubuntu + Theos cross-compiler works fine
+
+    steps:
+    # ── 1. Checkout ───────────────────────────────────────────────────────────
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    # ── 2. Cache Theos + SDKs ─────────────────────────────────────────────────
+    - name: Cache Theos
+      id: cache-theos
+      uses: actions/cache@v4
+      with:
+        path: |
+          /opt/theos
+          ~/.cache/apt
+        key: theos-${{ env.THEOS_VERSION }}-sdk${{ env.SDK_VERSION }}-${{ runner.os }}
+
+    # ── 3. Install system deps ────────────────────────────────────────────────
+    - name: Install build dependencies
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y \
+          git curl wget unzip \
+          clang lld llvm \
+          python3 python3-pip \
+          make cmake ninja-build \
+          fakeroot rsync \
+          xz-utils bzip2 zstd \
+          libssl-dev libcurl4-openssl-dev \
+          2>/dev/null
+        pip3 install --quiet pyyaml
+
+    # ── 4. Install Theos ──────────────────────────────────────────────────────
+    - name: Install Theos
+      if: steps.cache-theos.outputs.cache-hit != 'true'
+      run: |
+        set -euo pipefail
+        sudo mkdir -p /opt/theos
+        sudo chown -R "$USER" /opt/theos
+
+        echo "→ Cloning Theos…"
+        git clone --depth=1 --recursive "${{ env.THEOS_REPO }}" /opt/theos
+
+        echo "→ Downloading iOS SDKs…"
+        git clone --depth=1 "${{ env.SDKS_REPO }}" /tmp/theos-sdks
+        cp -r /tmp/theos-sdks/iPhoneOS*.sdk /opt/theos/sdks/
+        rm -rf /tmp/theos-sdks
+
+    # ── 5. Set up Theos environment ───────────────────────────────────────────
+    - name: Configure Theos environment
+      run: |
+        echo "THEOS=/opt/theos"         >> "$GITHUB_ENV"
+        echo "/opt/theos/bin"           >> "$GITHUB_PATH"
+        echo "THEOS_MAKE_PATH=/opt/theos/makefiles" >> "$GITHUB_ENV"
+
+    # ── 6. Install Dobby (prebuilt static lib) ────────────────────────────────
+    - name: Install Dobby static library
+      run: |
+        set -euo pipefail
+        mkdir -p /opt/theos/lib
+        # Download prebuilt Dobby arm64 static lib from a reliable mirror.
+        # Replace URL with your own mirror or a release asset if preferred.
+        DOBBY_URL="https://github.com/jmpews/Dobby/releases/download/v${{ env.DOBBY_VERSION }}/dobby-ios-arm64-static.zip"
+        wget -q "$DOBBY_URL" -O /tmp/dobby.zip || {
+          echo "⚠ Prebuilt Dobby not found at $DOBBY_URL – building from source…"
+          git clone --depth=1 https://github.com/jmpews/Dobby /tmp/Dobby-src
+          cmake -S /tmp/Dobby-src -B /tmp/Dobby-build \
+                -DCMAKE_BUILD_TYPE=Release \
+                -DCMAKE_SYSTEM_NAME=iOS \
+                -DCMAKE_OSX_ARCHITECTURES=arm64 \
+                -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+                -DPlugin.DobbyInstrument=ON \
+                -G Ninja
+          cmake --build /tmp/Dobby-build --config Release
+          cp /tmp/Dobby-build/libdobby.a /opt/theos/lib/libdobby.a
+          cp /tmp/Dobby-src/include/dobby.h /opt/theos/include/dobby.h
+          exit 0
+        }
+        unzip -q /tmp/dobby.zip -d /tmp/dobby
+        find /tmp/dobby -name "*.a" -exec cp {} /opt/theos/lib/libdobby.a \;
+        find /tmp/dobby -name "dobby.h" -exec cp {} /opt/theos/include/dobby.h \; || true
+
+    # ── 7. Download ImGui (vendored in imgui/) ────────────────────────────────
+    - name: Vendor ImGui + Metal / UIKit backends
+      run: |
+        set -euo pipefail
+        IMGUI_TAG="v1.90.8"
+        IMGUI_URL="https://github.com/ocornut/imgui/archive/refs/tags/${IMGUI_TAG}.tar.gz"
+        mkdir -p imgui
+        wget -q "$IMGUI_URL" -O /tmp/imgui.tar.gz
+        tar -xzf /tmp/imgui.tar.gz --strip-components=1 -C imgui \
+            --wildcards \
+            "*/imgui.h" \
+            "*/imgui_internal.h" \
+            "*/imconfig.h" \
+            "*/imstb_rectpack.h" \
+            "*/imstb_textedit.h" \
+            "*/imstb_truetype.h" \
+            "*/imgui.cpp" \
+            "*/imgui_draw.cpp" \
+            "*/imgui_tables.cpp" \
+            "*/imgui_widgets.cpp" \
+            "*/backends/imgui_impl_metal.h" \
+            "*/backends/imgui_impl_metal.mm" \
+            "*/backends/imgui_impl_osx.h" \
+            "*/backends/imgui_impl_osx.mm"
+
+        # Flatten backends into imgui/ root
+        mv -f imgui/backends/* imgui/ 2>/dev/null || true
+        rmdir imgui/backends 2>/dev/null || true
+
+        # Create UIKit backend shim (imgui_impl_uikit wraps the OSX backend
+        # via UIKit compatibility shims that ship with the Metal backend).
+        cat > imgui/imgui_impl_uikit.h << 'HEADER'
+        #pragma once
+        #include "imgui.h"
+        #ifdef __OBJC__
+        @class UIView;
+        IMGUI_API bool ImGui_ImplUIKit_Init(UIView *view);
+        IMGUI_API void ImGui_ImplUIKit_Shutdown();
+        IMGUI_API void ImGui_ImplUIKit_NewFrame();
+        #endif
+        HEADER
+
+        cat > imgui/imgui_impl_uikit.mm << 'SRC'
+        #import "imgui_impl_uikit.h"
+        #import "imgui_impl_osx.h"
+        #import <UIKit/UIKit.h>
+
+        bool ImGui_ImplUIKit_Init(UIView *view) {
+            // On iOS we reuse the OSX backend's coordinate logic;
+            // touch events are injected manually from UIKit hooks in Tweak.xm.
+            return true;
+        }
+        void ImGui_ImplUIKit_Shutdown() { ImGui_ImplOSX_Shutdown(); }
+        void ImGui_ImplUIKit_NewFrame() {
+            ImGuiIO &io = ImGui::GetIO();
+            CGSize sz = [UIScreen mainScreen].bounds.size;
+            io.DisplaySize = ImVec2(sz.width, sz.height);
+            io.DisplayFramebufferScale = ImVec2(
+                [UIScreen mainScreen].nativeScale,
+                [UIScreen mainScreen].nativeScale);
+        }
+        SRC
+
+    # ── 8. Create control file (required by Theos) ────────────────────────────
+    - name: Generate control file
+      run: |
+        mkdir -p layout/DEBIAN
+        cat > control << 'EOF'
+        Package: com.larptool.tweak
+        Name: LARPTool
+        Version: 1.0.0
+        Architecture: iphoneos-arm64
+        Description: LARP Overlay for Roblox – ImGui + Metal
+        Author: LARPTool
+        Section: Tweaks
+        Depends: mobilesubstrate | substitute | libhooker
+        EOF
+
+    # ── 9. Build ──────────────────────────────────────────────────────────────
+    - name: Build tweak
+      run: |
+        set -euo pipefail
+        export THEOS=/opt/theos
+        export ARCHS=arm64
+        export TARGET="iphone:clang:latest:14.0"
+
+        make package \
+          THEOS=/opt/theos \
+          ARCHS=arm64 \
+          TARGET="iphone:clang:latest:14.0" \
+          FINALPACKAGE=1 \
+          STRIP=1 \
+          -j"$(nproc)"
+
+    # ── 10. Extract .dylib from package ──────────────────────────────────────
+    - name: Extract dylib artifact
+      run: |
+        set -euo pipefail
+        PACKAGE=$(ls packages/*.deb 2>/dev/null | head -1)
+        if [ -z "$PACKAGE" ]; then
+          echo "⚠ No .deb found, searching build tree…"
+          DYLIB=$(find . -name "LARPTool.dylib" | head -1)
+        else
+          mkdir -p /tmp/deb_extract
+          dpkg-deb -x "$PACKAGE" /tmp/deb_extract
+          DYLIB=$(find /tmp/deb_extract -name "*.dylib" | head -1)
+        fi
+
+        mkdir -p artifacts
+        cp "$DYLIB" artifacts/LARPTool.dylib
+        echo "→ dylib size: $(wc -c < artifacts/LARPTool.dylib) bytes"
+
+        # Also keep the .deb if it exists
+        [ -f "$PACKAGE" ] && cp "$PACKAGE" artifacts/ || true
+
+    # ── 11. Upload artifacts ──────────────────────────────────────────────────
+    - name: Upload build artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: LARPTool-${{ github.sha }}
+        path: |
+          artifacts/LARPTool.dylib
+          artifacts/*.deb
+        retention-days: 30
+        if-no-files-found: error
+
+    # ── 12. Create GitHub Release (on tag push) ───────────────────────────────
+    - name: Create GitHub Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: |
+          artifacts/LARPTool.dylib
+          artifacts/*.deb
+        generate_release_notes: true
+        name: "LARPTool ${{ github.ref_name }}"
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    # ── 13. Print dylib info ──────────────────────────────────────────────────
+    - name: Print dylib info
+      if: always()
+      run: |
+        if [ -f artifacts/LARPTool.dylib ]; then
+          echo "═══════════════════════════════════"
+          echo "  LARPTool.dylib built successfully"
+          echo "═══════════════════════════════════"
+          file artifacts/LARPTool.dylib
+          size artifacts/LARPTool.dylib 2>/dev/null || ls -lh artifacts/LARPTool.dylib
+        else
+          echo "⚠ No dylib found in artifacts/"
+          find . -name "*.dylib" 2>/dev/null || echo "(none)"
+        fi

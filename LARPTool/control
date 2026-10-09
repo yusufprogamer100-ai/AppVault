@@ -1,0 +1,8 @@
+Package: com.larptool.tweak
+Name: LARPTool
+Version: 1.0.0
+Architecture: iphoneos-arm64
+Description: LARP Overlay for Roblox (ImGui + Metal + Luau Bridge)
+Author: LARPTool
+Section: Tweaks
+Depends: mobilesubstrate | substitute | libhooker
