@@ -50,22 +50,22 @@ static void *LT_FindSymbol(const char *symbol) {
 // ============================================================
 
 namespace Design {
-    // Roblox UIBlox Dark palette
-    static const ImVec4 BG_MAIN       = ImVec4(0.067f, 0.071f, 0.086f, 0.95f);  // #111216
-    static const ImVec4 BG_CARD       = ImVec4(0.114f, 0.118f, 0.133f, 1.0f);   // #1D1E22
-    static const ImVec4 ACCENT_BLUE   = ImVec4(0.000f, 0.518f, 0.867f, 1.0f);   // #0084DD
-    static const ImVec4 ACCENT_GREEN  = ImVec4(0.000f, 0.698f, 0.349f, 1.0f);   // #00B259
-    static const ImVec4 ACCENT_RED    = ImVec4(0.867f, 0.180f, 0.180f, 1.0f);   // #DD2E2E
-    static const ImVec4 TEXT_PRIMARY  = ImVec4(0.937f, 0.937f, 0.941f, 1.0f);
-    static const ImVec4 TEXT_MUTED    = ImVec4(0.549f, 0.557f, 0.588f, 1.0f);
-    static const float  ROUNDING      = 10.0f;
+    // Apple iOS Dark theme palette
+    static const ImVec4 BG_MAIN       = ImVec4(0.110f, 0.114f, 0.125f, 0.96f);  // #1C1D20 (iOS sheet)
+    static const ImVec4 BG_CARD       = ImVec4(0.165f, 0.170f, 0.185f, 1.0f);   // #2A2B2F (iOS group)
+    static const ImVec4 ACCENT_BLUE   = ImVec4(0.000f, 0.478f, 1.000f, 1.0f);   // #007AFF (Apple System Blue)
+    static const ImVec4 ACCENT_GREEN  = ImVec4(0.204f, 0.780f, 0.349f, 1.0f);   // #34C759 (Apple Green)
+    static const ImVec4 ACCENT_RED    = ImVec4(1.000f, 0.271f, 0.227f, 1.0f);   // #FF453A (Apple Red)
+    static const ImVec4 TEXT_PRIMARY  = ImVec4(0.960f, 0.960f, 0.970f, 1.0f);
+    static const ImVec4 TEXT_MUTED    = ImVec4(0.580f, 0.580f, 0.620f, 1.0f);
+    static const float  ROUNDING      = 16.0f;
 }
 
 namespace LT {
-    static const int   TOUCH_SIZE     = 45;   // px – invisible trigger zone
-    static const float ANIM_SPEED     = 8.0f; // fade/scale animation
+    static const int   TOUCH_SIZE     = 75;   // px – invisible trigger zone
+    static const float ANIM_SPEED     = 9.0f; // fade/scale animation
     static const int   VERSION_MAJOR  = 1;
-    static const int   VERSION_MINOR  = 0;
+    static const int   VERSION_MINOR  = 2;
 }
 
 // ============================================================
@@ -270,19 +270,48 @@ end
 // ============================================================
 
 namespace Spoofer {
-    static char  s_FakeRobux[32]   = "999,999";
+    static char  s_FakeRobux[32]    = "999,999";
     static char  s_FakeUsername[64] = "YourName";
     static char  s_FakeDisplay[64]  = "DisplayName";
-    static bool  s_PremiumBadge    = true;
-    static bool  s_VerifiedBadge   = false;
-    static bool  s_RobuxApplied    = false;
-    static bool  s_NameApplied     = false;
+    static bool  s_PremiumBadge     = true;
+    static bool  s_VerifiedBadge    = false;
+    static bool  s_RobuxApplied     = false;
+    static bool  s_NameApplied      = false;
+    static bool  s_LiveSpoof        = true;
+
+    static void RecursivePatchLabels(UIView *v, NSString *robuxStr, NSString *nameStr, NSString *dispStr) {
+        if (!v) return;
+        if ([v isKindOfClass:[UILabel class]]) {
+            UILabel *lbl = (UILabel *)v;
+            NSString *txt = lbl.text;
+            if (txt && txt.length > 0) {
+                if ([txt containsString:@"R$"] || [txt containsString:@"Robux"] || [txt hasPrefix:@"R "]) {
+                    lbl.text = [NSString stringWithFormat:@"R$ %@", robuxStr];
+                } else if ([txt hasPrefix:@"@"] && nameStr.length > 0) {
+                    lbl.text = [NSString stringWithFormat:@"@%@", nameStr];
+                }
+            }
+        }
+        for (UIView *sub in v.subviews) {
+            RecursivePatchLabels(sub, robuxStr, nameStr, dispStr);
+        }
+    }
+
+    static void PatchAllWindowLabels() {
+        dispatch_async(dispatch_get_main_queue(), ^{
+            NSString *robux = [NSString stringWithUTF8String:s_FakeRobux];
+            NSString *name  = [NSString stringWithUTF8String:s_FakeUsername];
+            NSString *disp  = [NSString stringWithUTF8String:s_FakeDisplay];
+            for (UIWindow *w in [UIApplication sharedApplication].windows) {
+                RecursivePatchLabels(w, robux, name, disp);
+            }
+        });
+    }
 
     static void ApplyRobux() {
         std::string script = R"(
 local amt = ")" + std::string(s_FakeRobux) + R"("
 local player = game:GetService("Players").LocalPlayer
--- Walk CoreGui for Robux label
 local function patchLabels(root)
     for _, v in ipairs(root:GetDescendants()) do
         if v:IsA("TextLabel") or v:IsA("TextButton") then
@@ -297,6 +326,7 @@ pcall(patchLabels, game:GetService("CoreGui"))
 pcall(patchLabels, player:FindFirstChild("PlayerGui") or game:GetService("Players").LocalPlayer.PlayerGui)
 )";
         LuauBridge::Execute(script, 8);
+        PatchAllWindowLabels();
         s_RobuxApplied = true;
     }
 
@@ -306,7 +336,6 @@ local uname = ")" + std::string(s_FakeUsername) + R"("
 local dname = ")" + std::string(s_FakeDisplay) + R"("
 local player = game:GetService("Players").LocalPlayer
 pcall(function()
-    -- Display name patch via OverrideMouseIconBehavior workaround
     local function patchLabels(root)
         for _, v in ipairs(root:GetDescendants()) do
             if (v:IsA("TextLabel") or v:IsA("TextButton")) then
@@ -321,6 +350,7 @@ pcall(function()
 end)
 )";
         LuauBridge::Execute(script, 8);
+        PatchAllWindowLabels();
         s_NameApplied = true;
     }
 
@@ -332,7 +362,6 @@ local player = game:GetService("Players").LocalPlayer
 local function patchIcons(root)
     for _, v in ipairs(root:GetDescendants()) do
         if v:IsA("ImageLabel") or v:IsA("ImageButton") then
-            -- Premium icon asset IDs
             if v.Image == "rbxasset://textures/ui/Shell/Icons/PremiumBadgeIcon.png"
             or v.Image:find("4087888742")
             or v.Image:find("premium") then
@@ -345,6 +374,7 @@ pcall(patchIcons, game:GetService("CoreGui"))
 pcall(patchIcons, player.PlayerGui)
 )";
         LuauBridge::Execute(script, 8);
+        PatchAllWindowLabels();
     }
 }
 
@@ -378,47 +408,48 @@ namespace UI {
 static void ApplyLARPStyle() {
     ImGuiStyle &st = ImGui::GetStyle();
     st.WindowRounding    = Design::ROUNDING;
-    st.FrameRounding     = 8.0f;
-    st.GrabRounding      = 8.0f;
-    st.PopupRounding     = 8.0f;
-    st.ScrollbarRounding = 8.0f;
-    st.TabRounding       = 8.0f;
-    st.WindowBorderSize  = 0.0f;
+    st.FrameRounding     = 10.0f;
+    st.GrabRounding      = 10.0f;
+    st.PopupRounding     = 12.0f;
+    st.ScrollbarRounding = 10.0f;
+    st.TabRounding       = 10.0f;
+    st.WindowBorderSize  = 1.0f;
     st.FrameBorderSize   = 0.0f;
-    st.WindowPadding     = ImVec2(14, 14);
-    st.FramePadding      = ImVec2(10, 6);
-    st.ItemSpacing       = ImVec2(10, 8);
-    st.ScrollbarSize     = 10.0f;
-    st.GrabMinSize       = 12.0f;
+    st.WindowPadding     = ImVec2(16, 16);
+    st.FramePadding      = ImVec2(12, 8);
+    st.ItemSpacing       = ImVec2(10, 10);
+    st.ScrollbarSize     = 16.0f; // Wider scrollbar for touch
+    st.GrabMinSize       = 14.0f;
 
     ImVec4 *c = st.Colors;
     c[ImGuiCol_WindowBg]          = Design::BG_MAIN;
+    c[ImGuiCol_Border]            = ImVec4(0.25f, 0.26f, 0.30f, 0.65f);
     c[ImGuiCol_ChildBg]           = Design::BG_CARD;
     c[ImGuiCol_PopupBg]           = Design::BG_MAIN;
     c[ImGuiCol_FrameBg]           = Design::BG_CARD;
-    c[ImGuiCol_FrameBgHovered]    = ImVec4(0.16f, 0.17f, 0.20f, 1.0f);
-    c[ImGuiCol_FrameBgActive]     = ImVec4(0.18f, 0.20f, 0.24f, 1.0f);
+    c[ImGuiCol_FrameBgHovered]    = ImVec4(0.20f, 0.21f, 0.24f, 1.0f);
+    c[ImGuiCol_FrameBgActive]     = ImVec4(0.24f, 0.25f, 0.28f, 1.0f);
     c[ImGuiCol_TitleBg]           = Design::BG_CARD;
     c[ImGuiCol_TitleBgActive]     = Design::BG_CARD;
     c[ImGuiCol_Button]            = Design::ACCENT_BLUE;
-    c[ImGuiCol_ButtonHovered]     = ImVec4(0.10f, 0.59f, 0.93f, 1.0f);
-    c[ImGuiCol_ButtonActive]      = ImVec4(0.00f, 0.44f, 0.76f, 1.0f);
-    c[ImGuiCol_Header]            = ImVec4(0.00f, 0.52f, 0.87f, 0.25f);
-    c[ImGuiCol_HeaderHovered]     = ImVec4(0.00f, 0.52f, 0.87f, 0.40f);
+    c[ImGuiCol_ButtonHovered]     = ImVec4(0.12f, 0.55f, 1.00f, 1.0f);
+    c[ImGuiCol_ButtonActive]      = ImVec4(0.00f, 0.40f, 0.85f, 1.0f);
+    c[ImGuiCol_Header]            = ImVec4(0.00f, 0.48f, 1.00f, 0.25f);
+    c[ImGuiCol_HeaderHovered]     = ImVec4(0.00f, 0.48f, 1.00f, 0.40f);
     c[ImGuiCol_HeaderActive]      = Design::ACCENT_BLUE;
     c[ImGuiCol_Tab]               = Design::BG_CARD;
-    c[ImGuiCol_TabHovered]        = ImVec4(0.00f, 0.52f, 0.87f, 0.55f);
+    c[ImGuiCol_TabHovered]        = ImVec4(0.00f, 0.48f, 1.00f, 0.50f);
     c[ImGuiCol_TabActive]         = Design::ACCENT_BLUE;
     c[ImGuiCol_TabUnfocused]      = Design::BG_CARD;
     c[ImGuiCol_TabUnfocusedActive]= Design::ACCENT_BLUE;
     c[ImGuiCol_SliderGrab]        = Design::ACCENT_BLUE;
-    c[ImGuiCol_SliderGrabActive]  = ImVec4(0.10f, 0.59f, 0.93f, 1.0f);
+    c[ImGuiCol_SliderGrabActive]  = ImVec4(0.12f, 0.55f, 1.00f, 1.0f);
     c[ImGuiCol_CheckMark]         = Design::ACCENT_GREEN;
-    c[ImGuiCol_Separator]         = ImVec4(0.20f, 0.21f, 0.25f, 1.0f);
+    c[ImGuiCol_Separator]         = ImVec4(0.22f, 0.23f, 0.26f, 1.0f);
     c[ImGuiCol_Text]              = Design::TEXT_PRIMARY;
     c[ImGuiCol_TextDisabled]      = Design::TEXT_MUTED;
     c[ImGuiCol_ScrollbarBg]       = Design::BG_CARD;
-    c[ImGuiCol_ScrollbarGrab]     = ImVec4(0.25f, 0.26f, 0.30f, 1.0f);
+    c[ImGuiCol_ScrollbarGrab]     = ImVec4(0.35f, 0.36f, 0.40f, 1.0f);
 }
 
 // ============================================================
@@ -517,27 +548,36 @@ static void DrawSpoofer() {
     ImGui::Spacing();
     SectionHeader("ECONOMY SPOOF");
 
-    ImGui::SetNextItemWidth(160.0f);
-    ImGui::InputText("Fake Robux##rob", Spoofer::s_FakeRobux, sizeof(Spoofer::s_FakeRobux));
-    ImGui::SameLine();
+    ImGui::Text("Fake Robux:");
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputText("##rob", Spoofer::s_FakeRobux, sizeof(Spoofer::s_FakeRobux));
+    
     PushGreenButton();
-    if (ImGui::Button("Apply##robux")) Spoofer::ApplyRobux();
+    if (ImGui::Button("Robux Miktarını Uygula##robux", ImVec2(-1, 30))) {
+        Spoofer::ApplyRobux();
+    }
     PopColoredButton();
     if (Spoofer::s_RobuxApplied)
-        ImGui::TextColored(Design::ACCENT_GREEN, "  ✓ Robux label overridden locally");
+        ImGui::TextColored(Design::ACCENT_GREEN, "  ✓ Robux güncellendi (Local Client)");
 
     Separator();
     SectionHeader("IDENTITY SPOOF");
 
-    ImGui::SetNextItemWidth(160.0f);
-    ImGui::InputText("Username##un", Spoofer::s_FakeUsername, sizeof(Spoofer::s_FakeUsername));
-    ImGui::SetNextItemWidth(160.0f);
-    ImGui::InputText("Display Name##dn", Spoofer::s_FakeDisplay, sizeof(Spoofer::s_FakeDisplay));
+    ImGui::Text("Username (@):");
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputText("##un", Spoofer::s_FakeUsername, sizeof(Spoofer::s_FakeUsername));
+
+    ImGui::Text("Display Name:");
+    ImGui::SetNextItemWidth(-1.0f);
+    ImGui::InputText("##dn", Spoofer::s_FakeDisplay, sizeof(Spoofer::s_FakeDisplay));
+
     PushGreenButton();
-    if (ImGui::Button("Apply Name##applyname")) Spoofer::ApplyName();
+    if (ImGui::Button("İsimleri Uygula##applyname", ImVec2(-1, 30))) {
+        Spoofer::ApplyName();
+    }
     PopColoredButton();
     if (Spoofer::s_NameApplied)
-        ImGui::TextColored(Design::ACCENT_GREEN, "  ✓ Name labels overridden locally");
+        ImGui::TextColored(Design::ACCENT_GREEN, "  ✓ İsimler güncellendi (Local Client)");
 
     Separator();
     SectionHeader("BADGE SPOOF");
@@ -545,7 +585,6 @@ static void DrawSpoofer() {
     bool prevPrem = Spoofer::s_PremiumBadge;
     bool prevVer  = Spoofer::s_VerifiedBadge;
     ImGui::Checkbox("Show Premium Badge",  &Spoofer::s_PremiumBadge);
-    ImGui::SameLine();
     ImGui::Checkbox("Show Verified Badge", &Spoofer::s_VerifiedBadge);
     if (Spoofer::s_PremiumBadge != prevPrem || Spoofer::s_VerifiedBadge != prevVer) {
         Spoofer::ApplyBadges();
@@ -553,7 +592,7 @@ static void DrawSpoofer() {
 
     ImGui::Spacing();
     ImGui::TextColored(Design::TEXT_MUTED,
-        "  All changes are LOCAL only –\n  other players see your real profile.");
+        "  Client-side mod – Tüm değişiklikler\n  yalnızca senin ekranında görünür.");
 }
 
 // ============================================================
@@ -607,7 +646,10 @@ static void DrawMenu() {
     ImGui::SetNextWindowBgAlpha(UI::s_MenuAlpha * UI::s_Opacity);
     ImVec2 center = ImVec2(io.DisplaySize.x * 0.5f, io.DisplaySize.y * 0.5f);
     ImGui::SetNextWindowPos(center, ImGuiCond_FirstUseEver, ImVec2(0.5f, 0.5f));
-    ImGui::SetNextWindowSize(ImVec2(440, 310), ImGuiCond_FirstUseEver);
+    // Vertical iOS sheet layout: 340w x 520h (or fit inside screen)
+    float w = 340.0f;
+    float h = (io.DisplaySize.y > 540.0f) ? 520.0f : (io.DisplaySize.y - 20.0f);
+    ImGui::SetNextWindowSize(ImVec2(w, h), ImGuiCond_Always);
 
     // Dock mode: tiny floating button
     if (UI::s_DockMode) {
@@ -629,33 +671,56 @@ static void DrawMenu() {
 
     ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse
                            | ImGuiWindowFlags_NoResize;
-    if (!ImGui::Begin("  LARPTool  //  Roblox Overlay", nullptr, flags)) {
+    // Window header with native close cross
+    if (!ImGui::Begin("  LARPTool iOS", &UI::s_MenuOpen, flags)) {
         ImGui::End();
         return;
     }
 
-    // Version badge
-    ImGui::SameLine(ImGui::GetContentRegionAvail().x - 50);
-    ImGui::TextColored(Design::TEXT_MUTED, "v%d.%d", LT::VERSION_MAJOR, LT::VERSION_MINOR);
+    // Prominent Red Close Button at top
+    ImGui::PushStyleColor(ImGuiCol_Button, Design::ACCENT_RED);
+    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(1.0f, 0.35f, 0.30f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.85f, 0.15f, 0.15f, 1.0f));
+    if (ImGui::Button("  KAPAT (X)  ", ImVec2(95, 26))) {
+        UI::s_MenuOpen = false;
+    }
+    ImGui::PopStyleColor(3);
 
-    // Tab bar
-    if (ImGui::BeginTabBar("##MainTabs")) {
-        if (ImGui::BeginTabItem("  Item Manager  ")) {
-            UI::s_ActiveTab = 0;
-            DrawItemManager();
-            ImGui::EndTabItem();
+    ImGui::SameLine();
+    ImGui::TextColored(Design::TEXT_MUTED, "v%d.%d iOS Dark", LT::VERSION_MAJOR, LT::VERSION_MINOR);
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // Scrollable child container for touch scrolling
+    if (ImGui::BeginChild("##ScrollableContent", ImVec2(0, -36), false, ImGuiWindowFlags_AlwaysVerticalScrollbar)) {
+        // Tab bar
+        if (ImGui::BeginTabBar("##MainTabs")) {
+            if (ImGui::BeginTabItem(" Spoofer ")) {
+                UI::s_ActiveTab = 1;
+                DrawSpoofer();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem(" Items ")) {
+                UI::s_ActiveTab = 0;
+                DrawItemManager();
+                ImGui::EndTabItem();
+            }
+            if (ImGui::BeginTabItem(" Settings ")) {
+                UI::s_ActiveTab = 2;
+                DrawSettings();
+                ImGui::EndTabItem();
+            }
+            ImGui::EndTabBar();
         }
-        if (ImGui::BeginTabItem("  Spoofer  ")) {
-            UI::s_ActiveTab = 1;
-            DrawSpoofer();
-            ImGui::EndTabItem();
-        }
-        if (ImGui::BeginTabItem("  Settings  ")) {
-            UI::s_ActiveTab = 2;
-            DrawSettings();
-            ImGui::EndTabItem();
-        }
-        ImGui::EndTabBar();
+        ImGui::EndChild();
+    }
+
+    // Bottom close bar
+    ImGui::Separator();
+    if (ImGui::Button("Menüyü Kapat", ImVec2(-1, 28))) {
+        UI::s_MenuOpen = false;
     }
 
     ImGui::End();
@@ -673,8 +738,9 @@ static void DrawMenu() {
 // so Roblox never clears or overwrites the menu.
 // ============================================================
 
-@interface LARPOverlayView : UIView
+@interface LARPOverlayView : UIView <UITextFieldDelegate>
 @property (nonatomic, strong) CADisplayLink *displayLink;
+@property (nonatomic, strong) UITextField   *hiddenTextField;
 @end
 
 static id<MTLDevice>         g_Device        = nullptr;
@@ -724,6 +790,15 @@ static void InitImGuiOverlay(id<MTLDevice> device) {
         self.userInteractionEnabled = NO;
         self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
 
+        // Hidden input field for iOS Virtual Keyboard
+        self.hiddenTextField = [[UITextField alloc] initWithFrame:CGRectZero];
+        self.hiddenTextField.delegate = self;
+        self.hiddenTextField.autocorrectionType = UITextAutocorrectionTypeNo;
+        self.hiddenTextField.autocapitalizationType = UITextAutocapitalizationTypeNone;
+        self.hiddenTextField.spellCheckingType = UITextSpellCheckingTypeNo;
+        self.hiddenTextField.hidden = YES;
+        [self addSubview:self.hiddenTextField];
+
         CAMetalLayer *metalLayer = (CAMetalLayer *)self.layer;
         metalLayer.opaque = NO;
         metalLayer.backgroundColor = [UIColor clearColor].CGColor;
@@ -736,6 +811,26 @@ static void InitImGuiOverlay(id<MTLDevice> device) {
         [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
     }
     return self;
+}
+
+- (BOOL)textField:(UITextField *)textField shouldChangeCharactersInRange:(NSRange)range replacementString:(NSString *)string {
+    ImGuiIO &io = ImGui::GetIO();
+    if (string.length > 0) {
+        io.AddInputCharactersUTF8([string UTF8String]);
+    } else {
+        // Backspace key
+        io.AddKeyEvent(ImGuiKey_Backspace, true);
+        io.AddKeyEvent(ImGuiKey_Backspace, false);
+    }
+    return NO; // We consume inputs directly into ImGui
+}
+
+- (BOOL)textFieldShouldReturn:(UITextField *)textField {
+    ImGuiIO &io = ImGui::GetIO();
+    io.AddKeyEvent(ImGuiKey_Enter, true);
+    io.AddKeyEvent(ImGuiKey_Enter, false);
+    [textField resignFirstResponder];
+    return YES;
 }
 
 - (void)layoutSubviews {
@@ -757,6 +852,11 @@ static void InitImGuiOverlay(id<MTLDevice> device) {
 
         if (UI::s_MenuAlpha <= 0.001f) {
             if (!self.hidden) self.hidden = YES;
+            if ([self.hiddenTextField isFirstResponder]) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self.hiddenTextField resignFirstResponder];
+                });
+            }
             return;
         }
 
@@ -792,6 +892,21 @@ static void InitImGuiOverlay(id<MTLDevice> device) {
 
         ImGuiIO &io = ImGui::GetIO();
         io.DeltaTime = dt;
+
+        // Auto manage Virtual Keyboard when ImGui text inputs are focused
+        if (io.WantTextInput) {
+            if (![self.hiddenTextField isFirstResponder]) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self.hiddenTextField becomeFirstResponder];
+                });
+            }
+        } else {
+            if ([self.hiddenTextField isFirstResponder]) {
+                dispatch_async(dispatch_get_main_queue(), ^{
+                    [self.hiddenTextField resignFirstResponder];
+                });
+            }
+        }
 
         ImGui_ImplMetal_NewFrame(g_RPD);
         ImGui_ImplUIKit_NewFrame();
@@ -977,13 +1092,23 @@ static void AttachOverlayToWindow(UIWindow *w) {
         for (UITouch *touch in touches) {
             CGPoint loc = [touch locationInView:nil];
             io.AddMousePosEvent(loc.x, loc.y);
-            if (touch.phase == UITouchPhaseBegan)
+
+            if (touch.phase == UITouchPhaseBegan) {
                 io.AddMouseButtonEvent(0, true);
-            else if (touch.phase == UITouchPhaseEnded ||
-                     touch.phase == UITouchPhaseCancelled)
+            } else if (touch.phase == UITouchPhaseMoved) {
+                // Touch drag-to-scroll: simulate mouse wheel on swipe
+                CGPoint prevLoc = [touch previousLocationInView:nil];
+                float dy = (float)(loc.y - prevLoc.y);
+                if (fabsf(dy) > 0.5f) {
+                    io.AddMouseWheelEvent(0.0f, dy * 0.08f);
+                }
+            } else if (touch.phase == UITouchPhaseEnded ||
+                       touch.phase == UITouchPhaseCancelled) {
                 io.AddMouseButtonEvent(0, false);
+            }
         }
-        if (UI::s_MenuOpen && UI::s_MenuAlpha > 0.05f && io.WantCaptureMouse) return; // swallow
+        // Only swallow if touch is within ImGui captured area
+        if (UI::s_MenuOpen && UI::s_MenuAlpha > 0.05f && io.WantCaptureMouse) return;
     }
     %orig;
 }
