@@ -74,36 +74,8 @@ namespace LT {
 
 namespace Memory {
 
-// Returns the slide of the first image matching `name` (partial match).
-static uintptr_t GetImageBase(const char *partialName) {
-    uint32_t count = _dyld_image_count();
-    for (uint32_t i = 0; i < count; ++i) {
-        const char *name = _dyld_get_image_name(i);
-        if (name && strstr(name, partialName)) {
-            return (uintptr_t)_dyld_get_image_vmaddr_slide(i);
-        }
-    }
-    return 0;
-}
-
-// Signature pattern scanner (wildcards as '\xCC').
-static uintptr_t ScanPattern(uintptr_t base, size_t rangeSize,
-                              const uint8_t *pattern, const char *mask) {
-    size_t patLen = strlen(mask);
-    for (size_t i = 0; i < rangeSize - patLen; ++i) {
-        bool found = true;
-        for (size_t j = 0; j < patLen; ++j) {
-            if (mask[j] == 'x' && ((uint8_t *)(base + i))[j] != pattern[j]) {
-                found = false;
-                break;
-            }
-        }
-        if (found) return base + i;
-    }
-    return 0;
-}
-
 // Convenience: read a value from an arbitrary address safely.
+
 template<typename T>
 static bool SafeRead(uintptr_t addr, T &out) {
 
