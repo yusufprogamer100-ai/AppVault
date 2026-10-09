@@ -17,7 +17,7 @@ defaults:
 jobs:
   build:
     name: Build LARPTool dylib
-    runs-on: ubuntu-latest
+    runs-on: macos-14
 
     steps:
       - name: Checkout
@@ -25,25 +25,10 @@ jobs:
         with:
           submodules: recursive
 
-      - name: Cache Theos
-        id: cache-theos
-        uses: actions/cache@v4
-        with:
-          path: /opt/theos
-          key: theos-ubuntu-sdk17-v5
-
-      - name: Install system packages
-        run: |
-          sudo apt-get update -qq
-          sudo apt-get install -y \
-            git curl wget unzip xz-utils bzip2 \
-            clang lld llvm \
-            python3 python3-pip \
-            make cmake ninja-build \
-            fakeroot rsync dpkg
+      - name: Select Xcode
+        run: sudo xcode-select -s /Applications/Xcode_15.4.app/Contents/Developer
 
       - name: Install Theos
-        if: steps.cache-theos.outputs.cache-hit != 'true'
         run: |
           set -euo pipefail
           sudo mkdir -p /opt/theos
@@ -58,18 +43,15 @@ jobs:
           echo "THEOS=/opt/theos" >> "$GITHUB_ENV"
           echo "/opt/theos/bin"   >> "$GITHUB_PATH"
 
-      - name: Create Dobby stub (use MSHookFunction instead)
+      - name: Create Dobby stub
         run: |
           mkdir -p /opt/theos/lib /opt/theos/include
-          # Dobby can't cross-compile on Linux (PAC macros are Clang-only).
-          # We stub it out; actual hooking uses Theos MSHookFunction.
           cat > /opt/theos/include/dobby.h << 'DOBBY_STUB'
           #pragma once
           #include <stdint.h>
           #ifdef __cplusplus
           extern "C" {
           #endif
-          // Stub: resolved at runtime via MSHookFunction (MobileSubstrate)
           static inline int DobbyHook(void *addr, void *new_func, void **old_func) {
               (void)addr; (void)new_func; (void)old_func; return 0;
           }
@@ -80,14 +62,13 @@ jobs:
           }
           #endif
           DOBBY_STUB
-          echo "Dobby stub created at /opt/theos/include/dobby.h"
 
       - name: Vendor ImGui
         run: |
           set -euo pipefail
           IMGUI_TAG="v1.90.8"
           mkdir -p imgui
-          wget -q "https://github.com/ocornut/imgui/archive/refs/tags/${IMGUI_TAG}.tar.gz" -O /tmp/imgui.tar.gz
+          curl -sL "https://github.com/ocornut/imgui/archive/refs/tags/${IMGUI_TAG}.tar.gz" -o /tmp/imgui.tar.gz
           tar -xzf /tmp/imgui.tar.gz --strip-components=1 -C imgui \
               --wildcards \
               "*/imgui.h" \
@@ -142,43 +123,30 @@ jobs:
             TARGET="iphone:clang:latest:14.0" \
             FINALPACKAGE=1 \
             STRIP=1 \
-            -j$(nproc) 2>&1 | tee build.log
+            -j$(sysctl -n hw.ncpu) 2>&1 | tee build.log
 
       - name: Extract dylib
         run: |
           set -euo pipefail
           mkdir -p "$GITHUB_WORKSPACE/artifacts"
-          PACKAGE=$(ls packages/*.deb 2>/dev/null | head -1 || true)
-          if [ -n "$PACKAGE" ]; then
-            mkdir -p /tmp/deb_extract
-            dpkg-deb -x "$PACKAGE" /tmp/deb_extract
-            DYLIB=$(find /tmp/deb_extract -name "*.dylib" | head -1)
-            cp "$PACKAGE" "$GITHUB_WORKSPACE/artifacts/"
-          else
-            DYLIB=$(find . -name "LARPTool.dylib" | head -1)
+          DYLIB=$(find .theos/obj/ -name "LARPTool.dylib" | head -1 || true)
+          if [ -z "$DYLIB" ]; then
+            DYLIB=$(find . -name "LARPTool.dylib" | head -1 || true)
           fi
           if [ -z "$DYLIB" ]; then
-            echo "ERROR: dylib not found"
+            echo "Searching all dylibs:"
             find . -name "*.dylib" || true
             exit 1
           fi
           cp "$DYLIB" "$GITHUB_WORKSPACE/artifacts/LARPTool.dylib"
-          echo "Built: $(ls -lh $GITHUB_WORKSPACE/artifacts/LARPTool.dylib)"
+          echo "Built successfully:"
+          ls -lh "$GITHUB_WORKSPACE/artifacts/LARPTool.dylib"
           file "$GITHUB_WORKSPACE/artifacts/LARPTool.dylib"
 
       - name: Upload artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: LARPTool-${{ github.sha }}
+          name: LARPTool-dylib
           path: ${{ github.workspace }}/artifacts/
           retention-days: 30
           if-no-files-found: error
-
-      - name: Create GitHub Release
-        if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
-        with:
-          files: ${{ github.workspace }}/artifacts/*
-          generate_release_notes: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
