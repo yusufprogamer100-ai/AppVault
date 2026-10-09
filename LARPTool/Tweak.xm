@@ -99,16 +99,20 @@ static uintptr_t ScanPattern(uintptr_t base, size_t rangeSize,
     return 0;
 }
 
+// Forward declare lua_State for Luau VM pointer
+struct lua_State;
+
 // Convenience: read a value from an arbitrary address safely.
 template<typename T>
 static bool SafeRead(uintptr_t addr, T &out) {
     if (!addr) return false;
-    mach_vm_size_t sz = sizeof(T);
-    kern_return_t kr  = mach_vm_read_overwrite(mach_task_self(),
-                                                addr, sz,
-                                                (mach_vm_address_t)&out, &sz);
+    vm_size_t sz = sizeof(T);
+    kern_return_t kr = vm_read_overwrite(mach_task_self(),
+                                         (vm_address_t)addr, sz,
+                                         (vm_address_t)&out, &sz);
     return kr == KERN_SUCCESS;
 }
+
 
 // Roblox-specific: locate `DataModel` via Dobby symbol resolver as fallback,
 // then walk the task-local instance tree via known ABI offsets.
