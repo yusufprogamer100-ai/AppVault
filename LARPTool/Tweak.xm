@@ -602,8 +602,6 @@ static void DrawMenu() {
     if (UI::s_MenuAlpha < 0.01f) return;
 
     ImGuiIO &io = ImGui::GetIO();
-    io.DisplaySize = ImVec2([[UIScreen mainScreen] bounds].size.width,
-                             [[UIScreen mainScreen] bounds].size.height);
 
     // Fade / scale window via SetNextWindow* before Begin
     ImGui::SetNextWindowBgAlpha(UI::s_MenuAlpha * UI::s_Opacity);
@@ -668,23 +666,27 @@ static void DrawMenu() {
 }
 
 // ============================================================
-#pragma mark - Metal Layer Hook
+#pragma mark - Dedicated Metal Overlay View
 // ============================================================
-// Hook -[CAMetalLayer nextDrawable] to render ImGui overlay on each frame.
-// Texture is assigned to descriptor before NewFrame to prevent pipeline assertion.
+// Dedicated transparent CAMetalLayer view hosted in UIWindow.
+// Renders ImGui completely independently of Roblox's game frame
+// so Roblox never clears or overwrites the menu.
 // ============================================================
 
-static id<CAMetalDrawable> (*orig_nextDrawable)(CAMetalLayer *, SEL) = nullptr;
+@interface LARPOverlayView : UIView
+@property (nonatomic, strong) CADisplayLink *displayLink;
+@end
+
 static id<MTLDevice>         g_Device        = nullptr;
 static id<MTLCommandQueue>   g_Queue         = nullptr;
 static MTLRenderPassDescriptor *g_RPD        = nullptr;
 static bool                  g_ImGuiReady    = false;
 static CFTimeInterval        g_LastTime      = 0;
 
-static void InitImGui(CAMetalLayer *layer) {
+static void InitImGuiOverlay(id<MTLDevice> device) {
     if (g_ImGuiReady) return;
 
-    g_Device = layer.device ?: MTLCreateSystemDefaultDevice();
+    g_Device = device ?: MTLCreateSystemDefaultDevice();
     if (!g_Device) return;
 
     g_Queue = [g_Device newCommandQueue];
@@ -700,22 +702,52 @@ static void InitImGui(CAMetalLayer *layer) {
     ImGui_ImplUIKit_Init(nil);
 
     g_RPD = [MTLRenderPassDescriptor new];
-    g_RPD.colorAttachments[0].loadAction  = MTLLoadActionLoad;
+    g_RPD.colorAttachments[0].loadAction  = MTLLoadActionClear;
+    g_RPD.colorAttachments[0].clearColor = MTLClearColorMake(0.0, 0.0, 0.0, 0.0);
     g_RPD.colorAttachments[0].storeAction = MTLStoreActionStore;
 
     g_LastTime   = CACurrentMediaTime();
     g_ImGuiReady = true;
-    NSLog(@"[LARPTool] ImGui Metal backend initialized ✓");
+    NSLog(@"[LARPTool] ImGui Metal backend initialized on dedicated overlay ✓");
 }
 
-static id<CAMetalDrawable> hooked_nextDrawable(CAMetalLayer *self, SEL _cmd) {
-    id<CAMetalDrawable> drawable = orig_nextDrawable(self, _cmd);
-    if (!drawable) return drawable;
+@implementation LARPOverlayView
 
++ (Class)layerClass {
+    return [CAMetalLayer class];
+}
+
+- (instancetype)initWithFrame:(CGRect)frame {
+    self = [super initWithFrame:frame];
+    if (self) {
+        self.backgroundColor = [UIColor clearColor];
+        self.userInteractionEnabled = NO;
+        self.autoresizingMask = UIViewAutoresizingFlexibleWidth | UIViewAutoresizingFlexibleHeight;
+
+        CAMetalLayer *metalLayer = (CAMetalLayer *)self.layer;
+        metalLayer.opaque = NO;
+        metalLayer.backgroundColor = [UIColor clearColor].CGColor;
+        metalLayer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+        metalLayer.device = MTLCreateSystemDefaultDevice();
+        metalLayer.framebufferOnly = NO;
+        metalLayer.contentsScale = [UIScreen mainScreen].nativeScale;
+
+        self.displayLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(renderLoop:)];
+        [self.displayLink addToRunLoop:[NSRunLoop mainRunLoop] forMode:NSRunLoopCommonModes];
+    }
+    return self;
+}
+
+- (void)layoutSubviews {
+    [super layoutSubviews];
+    CAMetalLayer *metalLayer = (CAMetalLayer *)self.layer;
+    metalLayer.contentsScale = [UIScreen mainScreen].nativeScale;
+    CGSize sz = self.bounds.size;
+    metalLayer.drawableSize = CGSizeMake(sz.width * metalLayer.contentsScale, sz.height * metalLayer.contentsScale);
+}
+
+- (void)renderLoop:(CADisplayLink *)link {
     @autoreleasepool {
-        InitImGui(self);
-        if (!g_ImGuiReady) return drawable;
-
         CFTimeInterval now = CACurrentMediaTime();
         float dt = (float)(now - g_LastTime);
         g_LastTime = now;
@@ -723,58 +755,70 @@ static id<CAMetalDrawable> hooked_nextDrawable(CAMetalLayer *self, SEL _cmd) {
 
         UI::Tick(dt);
 
-        if (UI::s_MenuAlpha > 0.001f) {
-            id<MTLTexture> texture = drawable.texture;
-            if (texture) {
-                // CRITICAL: Set texture BEFORE ImGui_ImplMetal_NewFrame
-                g_RPD.colorAttachments[0].texture = texture;
+        if (UI::s_MenuAlpha <= 0.001f) {
+            if (!self.hidden) self.hidden = YES;
+            return;
+        }
 
-                ImGuiIO &io = ImGui::GetIO();
-                io.DeltaTime = dt;
+        if (self.hidden) self.hidden = NO;
 
-                // Sync orientation with texture dimensions (Roblox landscape)
-                CGSize sz = [UIScreen mainScreen].bounds.size;
-                if ((texture.width > texture.height && sz.width < sz.height) ||
-                    (texture.width < texture.height && sz.width > sz.height)) {
-                    CGFloat tmp = sz.width; sz.width = sz.height; sz.height = tmp;
-                }
-                io.DisplaySize = ImVec2((float)sz.width, (float)sz.height);
-                io.DisplayFramebufferScale = ImVec2(
-                    (float)texture.width / (float)sz.width,
-                    (float)texture.height / (float)sz.height
-                );
-
-                ImGui_ImplMetal_NewFrame(g_RPD);
-                ImGui_ImplUIKit_NewFrame();
-                // Ensure orientation is preserved after UIKit NewFrame
-                io.DisplaySize = ImVec2((float)sz.width, (float)sz.height);
-                io.DisplayFramebufferScale = ImVec2(
-                    (float)texture.width / (float)sz.width,
-                    (float)texture.height / (float)sz.height
-                );
-
-                ImGui::NewFrame();
-                DrawMenu();
-                ImGui::Render();
-
-                id<MTLCommandBuffer> cmdBuf = [g_Queue commandBuffer];
-                if (cmdBuf) {
-                    id<MTLRenderCommandEncoder> enc =
-                        [cmdBuf renderCommandEncoderWithDescriptor:g_RPD];
-                    if (enc) {
-                        [enc pushDebugGroup:@"LARPTool::ImGui"];
-                        ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), cmdBuf, enc);
-                        [enc popDebugGroup];
-                        [enc endEncoding];
-                    }
-                    [cmdBuf commit];
-                    [cmdBuf waitUntilScheduled];
-                }
+        if (self.superview) {
+            [self.superview bringSubviewToFront:self];
+            UIView *tv = [self.superview viewWithTag:0xCAFE];
+            if (tv) {
+                [self.superview bringSubviewToFront:tv];
             }
         }
+
+        CAMetalLayer *metalLayer = (CAMetalLayer *)self.layer;
+        InitImGuiOverlay(metalLayer.device);
+        if (!g_ImGuiReady) return;
+
+        CGSize sz = self.bounds.size;
+        if (sz.width <= 0.0f || sz.height <= 0.0f) return;
+
+        CGFloat scale = [UIScreen mainScreen].nativeScale;
+        if (metalLayer.drawableSize.width != sz.width * scale || metalLayer.drawableSize.height != sz.height * scale) {
+            metalLayer.drawableSize = CGSizeMake(sz.width * scale, sz.height * scale);
+        }
+
+        id<CAMetalDrawable> drawable = [metalLayer nextDrawable];
+        if (!drawable) return;
+
+        id<MTLTexture> texture = drawable.texture;
+        if (!texture) return;
+
+        g_RPD.colorAttachments[0].texture = texture;
+
+        ImGuiIO &io = ImGui::GetIO();
+        io.DeltaTime = dt;
+
+        ImGui_ImplMetal_NewFrame(g_RPD);
+        ImGui_ImplUIKit_NewFrame();
+
+        io.DisplaySize = ImVec2((float)sz.width, (float)sz.height);
+        io.DisplayFramebufferScale = ImVec2((float)scale, (float)scale);
+
+        ImGui::NewFrame();
+        DrawMenu();
+        ImGui::Render();
+
+        id<MTLCommandBuffer> cmdBuf = [g_Queue commandBuffer];
+        if (cmdBuf) {
+            id<MTLRenderCommandEncoder> enc = [cmdBuf renderCommandEncoderWithDescriptor:g_RPD];
+            if (enc) {
+                [enc pushDebugGroup:@"LARPTool::ImGui"];
+                ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), cmdBuf, enc);
+                [enc popDebugGroup];
+                [enc endEncoding];
+            }
+            [cmdBuf presentDrawable:drawable];
+            [cmdBuf commit];
+        }
     }
-    return drawable;
 }
+
+@end
 
 
 // ============================================================
@@ -886,27 +930,34 @@ static void ShowLaunchWatermark(UIWindow *parentWindow) {
 // ============================================================
 
 static void AttachOverlayToWindow(UIWindow *w) {
-    if (!w || [w viewWithTag:0xCAFE]) return;
+    if (!w) return;
 
-    LARPTriggerView *tv = [[LARPTriggerView alloc] initAtBottomLeft];
-    tv.tag = 0xCAFE;
-    [w addSubview:tv];
-    [w bringSubviewToFront:tv];
+    if (![w viewWithTag:0xCAFF]) {
+        LARPOverlayView *ov = [[LARPOverlayView alloc] initWithFrame:w.bounds];
+        ov.tag = 0xCAFF;
+        [w addSubview:ov];
+        [w bringSubviewToFront:ov];
+        NSLog(@"[LARPTool] Dedicated Metal overlay view attached.");
+    }
 
-    ShowLaunchWatermark(w);
-    NSLog(@"[LARPTool] Trigger button and launch watermark attached to window.");
+    if (![w viewWithTag:0xCAFE]) {
+        LARPTriggerView *tv = [[LARPTriggerView alloc] initAtBottomLeft];
+        tv.tag = 0xCAFE;
+        [w addSubview:tv];
+        [w bringSubviewToFront:tv];
+
+        ShowLaunchWatermark(w);
+        NSLog(@"[LARPTool] Trigger button and launch watermark attached to window.");
+    }
 }
 
 %hook UIWindow
 
 - (void)makeKeyAndVisible {
     %orig;
-    static dispatch_once_t once;
-    dispatch_once(&once, ^{
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            UIWindow *target = self ?: [[UIApplication sharedApplication] keyWindow];
-            AttachOverlayToWindow(target);
-        });
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.8 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        UIWindow *target = self ?: [[UIApplication sharedApplication] keyWindow];
+        AttachOverlayToWindow(target);
     });
 }
 
@@ -972,20 +1023,10 @@ static void OnAppBecameActive(CFNotificationCenterRef center, void *observer, CF
         // 1. Resolve Roblox memory layout
         Memory::RobloxABI::Resolve();
 
-        // 2. Hook CAMetalLayer nextDrawable
-        Class metalLayerClass = NSClassFromString(@"CAMetalLayer");
-        SEL nextDrawableSel = @selector(nextDrawable);
-        Method m = class_getInstanceMethod(metalLayerClass, nextDrawableSel);
-        if (m) {
-            orig_nextDrawable = (id<CAMetalDrawable>(*)(CAMetalLayer *, SEL))method_getImplementation(m);
-            method_setImplementation(m, (IMP)hooked_nextDrawable);
-            NSLog(@"[LARPTool] CAMetalLayer::nextDrawable hooked ✓");
-        }
-
-        // 3. Initialize Logos hooks (UIWindow, UIApplication)
+        // 2. Initialize Logos hooks (UIWindow, UIApplication)
         %init;
 
-        // 4. Listen for app became active as guaranteed trigger attachment
+        // 3. Listen for app became active as guaranteed trigger attachment
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetLocalCenter(),
             nullptr,
