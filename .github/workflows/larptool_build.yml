@@ -1,0 +1,212 @@
+name: LARPTool – Build & Release
+
+on:
+  push:
+    branches: [ main, master ]
+    paths:
+      - 'LARPTool/**'
+      - '.github/workflows/larptool_build.yml'
+  workflow_dispatch:
+
+env:
+  THEOS_REPO:   "https://github.com/theos/theos"
+  SDKS_REPO:    "https://github.com/theos/sdks"
+
+defaults:
+  run:
+    working-directory: LARPTool
+
+jobs:
+  build:
+    name: Build LARPTool.dylib
+    runs-on: ubuntu-latest
+
+    steps:
+    # ── 1. Checkout ────────────────────────────────────────────────────────────
+    - name: Checkout repository
+      uses: actions/checkout@v4
+      with:
+        submodules: recursive
+
+    # ── 2. Cache Theos + SDKs ──────────────────────────────────────────────────
+    - name: Cache Theos
+      id: cache-theos
+      uses: actions/cache@v4
+      with:
+        path: /opt/theos
+        key: theos-ubuntu-sdk17-v4
+
+    # ── 3. System dependencies ─────────────────────────────────────────────────
+    - name: Install system packages
+      run: |
+        sudo apt-get update -qq
+        sudo apt-get install -y \
+          git curl wget unzip xz-utils bzip2 \
+          clang lld llvm \
+          python3 python3-pip \
+          make cmake ninja-build \
+          fakeroot rsync \
+          2>/dev/null
+
+    # ── 4. Install Theos ───────────────────────────────────────────────────────
+    - name: Install Theos
+      if: steps.cache-theos.outputs.cache-hit != 'true'
+      run: |
+        set -euo pipefail
+        sudo mkdir -p /opt/theos
+        sudo chown -R "$USER" /opt/theos
+
+        echo "→ Cloning Theos (main branch)…"
+        git clone --depth=1 --recursive "${{ env.THEOS_REPO }}" /opt/theos
+
+        echo "→ Downloading iOS SDKs…"
+        git clone --depth=1 "${{ env.SDKS_REPO }}" /tmp/theos-sdks
+        cp -r /tmp/theos-sdks/iPhoneOS*.sdk /opt/theos/sdks/ || true
+        rm -rf /tmp/theos-sdks
+
+    # ── 5. Theos env ───────────────────────────────────────────────────────────
+    - name: Configure Theos environment
+      run: |
+        echo "THEOS=/opt/theos"          >> "$GITHUB_ENV"
+        echo "/opt/theos/bin"            >> "$GITHUB_PATH"
+
+    # ── 6. Install Dobby ───────────────────────────────────────────────────────
+    - name: Build & install Dobby (arm64 static)
+      run: |
+        set -euo pipefail
+        mkdir -p /opt/theos/lib /opt/theos/include
+
+        git clone --depth=1 https://github.com/jmpews/Dobby /tmp/Dobby-src
+        cmake -S /tmp/Dobby-src -B /tmp/Dobby-build \
+              -DCMAKE_BUILD_TYPE=Release \
+              -DCMAKE_SYSTEM_NAME=iOS \
+              -DCMAKE_OSX_ARCHITECTURES=arm64 \
+              -DCMAKE_OSX_DEPLOYMENT_TARGET=14.0 \
+              -DPlugin.DobbyInstrument=ON \
+              -DDOBBY_DEBUG=OFF \
+              -G Ninja
+        cmake --build /tmp/Dobby-build --config Release -j$(nproc)
+
+        find /tmp/Dobby-build -name "*.a" | head -1 | xargs -I{} cp {} /opt/theos/lib/libdobby.a
+        cp /tmp/Dobby-src/include/dobby.h /opt/theos/include/dobby.h
+        echo "→ Dobby installed: $(ls -lh /opt/theos/lib/libdobby.a)"
+
+    # ── 7. Vendor ImGui ────────────────────────────────────────────────────────
+    - name: Vendor ImGui sources
+      run: |
+        set -euo pipefail
+        IMGUI_TAG="v1.90.8"
+        mkdir -p imgui
+
+        wget -q "https://github.com/ocornut/imgui/archive/refs/tags/${IMGUI_TAG}.tar.gz" \
+             -O /tmp/imgui.tar.gz
+
+        tar -xzf /tmp/imgui.tar.gz --strip-components=1 -C imgui \
+            --wildcards \
+            "*/imgui.h" \
+            "*/imgui_internal.h" \
+            "*/imconfig.h" \
+            "*/imstb_rectpack.h" \
+            "*/imstb_textedit.h" \
+            "*/imstb_truetype.h" \
+            "*/imgui.cpp" \
+            "*/imgui_draw.cpp" \
+            "*/imgui_tables.cpp" \
+            "*/imgui_widgets.cpp" \
+            "*/backends/imgui_impl_metal.h" \
+            "*/backends/imgui_impl_metal.mm" \
+            "*/backends/imgui_impl_osx.h" \
+            "*/backends/imgui_impl_osx.mm"
+
+        # Flatten backends into imgui/ root
+        [ -d imgui/backends ] && mv -f imgui/backends/* imgui/ && rmdir imgui/backends || true
+
+        # UIKit shim header
+        cat > imgui/imgui_impl_uikit.h << 'EOHEADER'
+#pragma once
+#include "imgui.h"
+#ifdef __OBJC__
+@class UIView;
+IMGUI_API bool ImGui_ImplUIKit_Init(UIView *view);
+IMGUI_API void ImGui_ImplUIKit_Shutdown();
+IMGUI_API void ImGui_ImplUIKit_NewFrame();
+#endif
+EOHEADER
+
+        # UIKit shim implementation
+        cat > imgui/imgui_impl_uikit.mm << 'EOSRC'
+#import "imgui_impl_uikit.h"
+#import "imgui.h"
+#import <UIKit/UIKit.h>
+
+bool ImGui_ImplUIKit_Init(UIView *) { return true; }
+void ImGui_ImplUIKit_Shutdown() {}
+void ImGui_ImplUIKit_NewFrame() {
+    ImGuiIO &io = ImGui::GetIO();
+    CGSize sz = [UIScreen mainScreen].bounds.size;
+    io.DisplaySize = ImVec2((float)sz.width, (float)sz.height);
+    io.DisplayFramebufferScale = ImVec2(
+        (float)[UIScreen mainScreen].nativeScale,
+        (float)[UIScreen mainScreen].nativeScale);
+}
+EOSRC
+
+        echo "→ ImGui files:"
+        ls imgui/
+
+    # ── 8. Build tweak ─────────────────────────────────────────────────────────
+    - name: Build LARPTool
+      run: |
+        set -euo pipefail
+        export THEOS=/opt/theos
+        export ARCHS=arm64
+
+        make package \
+          THEOS=/opt/theos \
+          ARCHS=arm64 \
+          TARGET="iphone:clang:latest:14.0" \
+          FINALPACKAGE=1 \
+          STRIP=1 \
+          -j$(nproc) \
+          2>&1 | tee build.log
+
+    # ── 9. Extract .dylib ──────────────────────────────────────────────────────
+    - name: Extract dylib
+      run: |
+        set -euo pipefail
+        mkdir -p ../artifacts
+
+        PACKAGE=$(ls packages/*.deb 2>/dev/null | head -1 || true)
+        if [ -n "$PACKAGE" ]; then
+          mkdir -p /tmp/deb_extract
+          dpkg-deb -x "$PACKAGE" /tmp/deb_extract
+          DYLIB=$(find /tmp/deb_extract -name "*.dylib" | head -1)
+          cp "$PACKAGE" ../artifacts/
+        else
+          DYLIB=$(find . -name "LARPTool.dylib" | head -1)
+        fi
+
+        [ -z "$DYLIB" ] && { echo "ERROR: dylib not found!"; find . -name "*.dylib"; exit 1; }
+        cp "$DYLIB" ../artifacts/LARPTool.dylib
+
+        echo "✅ dylib: $(ls -lh ../artifacts/LARPTool.dylib)"
+        file ../artifacts/LARPTool.dylib
+
+    # ── 10. Upload artifacts ───────────────────────────────────────────────────
+    - name: Upload artifacts
+      uses: actions/upload-artifact@v4
+      with:
+        name: LARPTool-${{ github.sha }}
+        path: artifacts/
+        retention-days: 30
+        if-no-files-found: error
+
+    # ── 11. GitHub Release on tag ──────────────────────────────────────────────
+    - name: Create GitHub Release
+      if: startsWith(github.ref, 'refs/tags/v')
+      uses: softprops/action-gh-release@v2
+      with:
+        files: artifacts/*
+        generate_release_notes: true
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
