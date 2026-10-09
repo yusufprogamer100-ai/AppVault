@@ -24,21 +24,19 @@ TARGET                        = iphone:clang:latest:14.0
 
 # ── Compiler Flags ───────────────────────────────────────────────────────────
 $(TWEAK_NAME)_CFLAGS          = -fobjc-arc -std=c++17 -O2 \
-                                 -DIMGUI_IMPL_METAL_CPP \
                                  -Iimgui \
                                  -Wno-deprecated-declarations \
                                  -Wno-unused-variable
 
 $(TWEAK_NAME)_CCFLAGS         = -fobjc-arc -std=c++17 -O2 \
-                                 -DIMGUI_IMPL_METAL_CPP \
                                  -Iimgui \
                                  -Wno-deprecated-declarations \
                                  -Wno-unused-variable
 
 $(TWEAK_NAME)_OBJCFLAGS       = -fobjc-arc -std=c++17 -O2 \
-                                 -DIMGUI_IMPL_METAL_CPP \
                                  -Iimgui \
                                  -Wno-deprecated-declarations
+
 
 # ── Linker Flags ─────────────────────────────────────────────────────────────
 $(TWEAK_NAME)_FRAMEWORKS      = Metal MetalKit UIKit QuartzCore Foundation CoreGraphics

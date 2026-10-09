@@ -28,15 +28,12 @@
 #include "dobby.h"   // header-only stub; DobbyHook/DobbySymbolResolver are no-ops
                      // Actual runtime resolution uses dlsym / MSFindSymbol below.
 
-// Runtime symbol resolver: tries dlsym(RTLD_DEFAULT) then MSFindSymbol
+// Runtime symbol resolver: dynamic lookup across loaded images via dlsym
 static void *LT_FindSymbol(const char *symbol) {
-    void *addr = dlsym(RTLD_DEFAULT, symbol);
-    if (addr) return addr;
-#if __has_include(<substrate.h>)
-    addr = MSFindSymbol(nullptr, symbol);
-#endif
-    return addr;
+    if (!symbol) return nullptr;
+    return dlsym(RTLD_DEFAULT, symbol);
 }
+
 
 
 // ImGui headers (vendored in imgui/)
