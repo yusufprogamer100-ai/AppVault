@@ -136,23 +136,13 @@ namespace RobloxABI {
     static const char kDataModelMask[] = "xx??????";
 
     static void Resolve() {
-        uintptr_t base = GetImageBase("RobloxPlayer");
-        if (!base) base = GetImageBase("Roblox");
-        if (!base) return;
-
-        // Try symbol first (works on un-stripped builds / some IPA cracks).
         void *sym = LT_FindSymbol("_ZN5RBX13TaskScheduler11getInstanceEv");
         if (sym) {
             s_TaskSchedulerPtr = (uintptr_t)sym;
         }
-
-        // Fallback: pattern scan the first 80 MB of the text segment.
-        if (!s_TaskSchedulerPtr) {
-            s_TaskSchedulerPtr = ScanPattern(base, 80 * 1024 * 1024,
-                                             kDataModelPat, kDataModelMask);
-        }
     }
 }
+
 } // namespace Memory
 
 // ============================================================
@@ -760,26 +750,33 @@ static id<CAMetalDrawable> hooked_nextDrawable(CAMetalLayer *self, SEL _cmd) {
 
         UI::Tick(dt);
 
-        ImGui_ImplMetal_NewFrame(g_RPD);
-        ImGui_ImplUIKit_NewFrame();
-        ImGui::NewFrame();
+        if (UI::s_MenuAlpha > 0.001f) {
+            ImGui_ImplMetal_NewFrame(g_RPD);
+            ImGui_ImplUIKit_NewFrame();
+            ImGui::NewFrame();
 
-        DrawMenu();
+            DrawMenu();
 
-        ImGui::Render();
+            ImGui::Render();
 
-        id<MTLCommandBuffer> cmdBuf = [g_Queue commandBuffer];
-        g_RPD.colorAttachments[0].texture = drawable.texture;
-        id<MTLRenderCommandEncoder> enc =
-            [cmdBuf renderCommandEncoderWithDescriptor:g_RPD];
-        [enc pushDebugGroup:@"LARPTool::ImGui"];
-        ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), cmdBuf, enc);
-        [enc popDebugGroup];
-        [enc endEncoding];
-        [cmdBuf commit];
+            id<MTLCommandBuffer> cmdBuf = [g_Queue commandBuffer];
+            if (cmdBuf) {
+                g_RPD.colorAttachments[0].texture = drawable.texture;
+                id<MTLRenderCommandEncoder> enc =
+                    [cmdBuf renderCommandEncoderWithDescriptor:g_RPD];
+                if (enc) {
+                    [enc pushDebugGroup:@"LARPTool::ImGui"];
+                    ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), cmdBuf, enc);
+                    [enc popDebugGroup];
+                    [enc endEncoding];
+                }
+                [cmdBuf commit];
+            }
+        }
     }
     return drawable;
 }
+
 
 // ============================================================
 #pragma mark - Touch Trigger Zone (UITapGestureRecognizer)
@@ -832,14 +829,17 @@ static id<CAMetalDrawable> hooked_nextDrawable(CAMetalLayer *self, SEL _cmd) {
 
 - (void)makeKeyAndVisible {
     %orig;
-    // Inject once into the key window
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        dispatch_async(dispatch_get_main_queue(), ^{
-            LARPTriggerView *tv = [[LARPTriggerView alloc] initAtTopRight];
-            tv.tag = 0xCAFE;
-            [[UIApplication sharedApplication].keyWindow addSubview:tv];
-            [[UIApplication sharedApplication].keyWindow bringSubviewToFront:tv];
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            UIWindow *w = [self isKeyWindow] ? self : [[UIApplication sharedApplication] keyWindow];
+            if (w && ![w viewWithTag:0xCAFE]) {
+                LARPTriggerView *tv = [[LARPTriggerView alloc] initAtTopRight];
+                tv.tag = 0xCAFE;
+                [w addSubview:tv];
+                [w bringSubviewToFront:tv];
+                NSLog(@"[LARPTool] Trigger view attached successfully to window.");
+            }
         });
     });
 }
@@ -855,8 +855,8 @@ static id<CAMetalDrawable> hooked_nextDrawable(CAMetalLayer *self, SEL _cmd) {
 %hook UIApplication
 
 - (void)sendEvent:(UIEvent *)event {
-    ImGuiIO &io = ImGui::GetIO();
-    if (event.type == UIEventTypeTouches) {
+    if (ImGui::GetCurrentContext() != nullptr && event.type == UIEventTypeTouches) {
+        ImGuiIO &io = ImGui::GetIO();
         NSSet<UITouch *> *touches = [event allTouches];
         for (UITouch *touch in touches) {
             CGPoint loc = [touch locationInView:nil];
@@ -873,6 +873,7 @@ static id<CAMetalDrawable> hooked_nextDrawable(CAMetalLayer *self, SEL _cmd) {
 }
 
 %end
+
 
 // ============================================================
 #pragma mark - Constructor – hooks & resolution
