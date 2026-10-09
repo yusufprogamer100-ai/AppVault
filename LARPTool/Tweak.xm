@@ -668,26 +668,24 @@ static void DrawMenu() {
 }
 
 // ============================================================
-#pragma mark - Metal Layer Hook
+#pragma mark - Metal Render Hook (presentDrawable)
 // ============================================================
-// We hook -[CAMetalLayer nextDrawable] via Dobby to intercept
-// the drawable before Roblox presents it, then render ImGui on top.
+// Intercept -[MTLCommandBuffer presentDrawable:] on _MTLCommandBuffer.
+// This executes AFTER Roblox completes rendering the game frame,
+// rendering ImGui on top without drawable contention or race conditions.
 // ============================================================
 
-static id<CAMetalDrawable> (*orig_nextDrawable)(CAMetalLayer *, SEL) = nullptr;
 static id<MTLDevice>         g_Device        = nullptr;
-static id<MTLCommandQueue>   g_Queue         = nullptr;
 static MTLRenderPassDescriptor *g_RPD        = nullptr;
 static bool                  g_ImGuiReady    = false;
 static CFTimeInterval        g_LastTime      = 0;
+static __unsafe_unretained id<MTLDrawable> g_LastRenderedDrawable = nil;
 
-static void InitImGui(CAMetalLayer *layer) {
+static void InitImGui(id<MTLDevice> device) {
     if (g_ImGuiReady) return;
 
-    g_Device = layer.device ?: MTLCreateSystemDefaultDevice();
-    g_Queue  = [g_Device newCommandQueue];
-    layer.device = g_Device;
-    layer.pixelFormat = MTLPixelFormatBGRA8Unorm;
+    g_Device = device ?: MTLCreateSystemDefaultDevice();
+    if (!g_Device) return;
 
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
@@ -697,23 +695,30 @@ static void InitImGui(CAMetalLayer *layer) {
 
     ApplyLARPStyle();
     ImGui_ImplMetal_Init(g_Device);
-    // UIKit backend: pass nil – we drive events manually from our gesture hooks
     ImGui_ImplUIKit_Init(nil);
 
     g_RPD = [MTLRenderPassDescriptor new];
     g_RPD.colorAttachments[0].loadAction  = MTLLoadActionLoad;
     g_RPD.colorAttachments[0].storeAction = MTLStoreActionStore;
 
-    g_LastTime  = CACurrentMediaTime();
+    g_LastTime   = CACurrentMediaTime();
     g_ImGuiReady = true;
+    NSLog(@"[LARPTool] ImGui Metal backend initialized ✓");
 }
 
-static id<CAMetalDrawable> hooked_nextDrawable(CAMetalLayer *self, SEL _cmd) {
-    id<CAMetalDrawable> drawable = orig_nextDrawable(self, _cmd);
-    if (!drawable) return drawable;
+static void RenderImGuiOverlay(id<MTLCommandBuffer> cmdBuf, id<MTLDrawable> drawable) {
+    if (!drawable || drawable == g_LastRenderedDrawable) return;
+    if (![drawable conformsToProtocol:@protocol(CAMetalDrawable)]) return;
+
+    id<CAMetalDrawable> metalDrawable = (id<CAMetalDrawable>)drawable;
+    id<MTLTexture> texture = metalDrawable.texture;
+    if (!texture) return;
+
+    g_LastRenderedDrawable = drawable;
 
     @autoreleasepool {
-        InitImGui(self);
+        InitImGui(cmdBuf.device);
+        if (!g_ImGuiReady) return;
 
         CFTimeInterval now = CACurrentMediaTime();
         float dt = (float)(now - g_LastTime);
@@ -723,6 +728,12 @@ static id<CAMetalDrawable> hooked_nextDrawable(CAMetalLayer *self, SEL _cmd) {
         UI::Tick(dt);
 
         if (UI::s_MenuAlpha > 0.001f) {
+            // Set frame texture on descriptor BEFORE ImGui_ImplMetal_NewFrame
+            g_RPD.colorAttachments[0].texture = texture;
+
+            ImGuiIO &io = ImGui::GetIO();
+            io.DeltaTime = dt;
+
             ImGui_ImplMetal_NewFrame(g_RPD);
             ImGui_ImplUIKit_NewFrame();
             ImGui::NewFrame();
@@ -731,23 +742,54 @@ static id<CAMetalDrawable> hooked_nextDrawable(CAMetalLayer *self, SEL _cmd) {
 
             ImGui::Render();
 
-            id<MTLCommandBuffer> cmdBuf = [g_Queue commandBuffer];
-            if (cmdBuf) {
-                g_RPD.colorAttachments[0].texture = drawable.texture;
-                id<MTLRenderCommandEncoder> enc =
-                    [cmdBuf renderCommandEncoderWithDescriptor:g_RPD];
-                if (enc) {
-                    [enc pushDebugGroup:@"LARPTool::ImGui"];
-                    ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), cmdBuf, enc);
-                    [enc popDebugGroup];
-                    [enc endEncoding];
+            id<MTLRenderCommandEncoder> enc = nil;
+            @try {
+                enc = [cmdBuf renderCommandEncoderWithDescriptor:g_RPD];
+            } @catch (NSException *ex) {
+                enc = nil;
+            }
+
+            if (enc) {
+                [enc pushDebugGroup:@"LARPTool::ImGui"];
+                ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), cmdBuf, enc);
+                [enc popDebugGroup];
+                [enc endEncoding];
+            } else if (cmdBuf.commandQueue) {
+                id<MTLCommandBuffer> fallbackBuf = [cmdBuf.commandQueue commandBuffer];
+                if (fallbackBuf) {
+                    id<MTLRenderCommandEncoder> fEnc = [fallbackBuf renderCommandEncoderWithDescriptor:g_RPD];
+                    if (fEnc) {
+                        [fEnc pushDebugGroup:@"LARPTool::ImGui"];
+                        ImGui_ImplMetal_RenderDrawData(ImGui::GetDrawData(), fallbackBuf, fEnc);
+                        [fEnc popDebugGroup];
+                        [fEnc endEncoding];
+                    }
+                    [fallbackBuf commit];
+                    [fallbackBuf waitUntilScheduled];
                 }
-                [cmdBuf commit];
             }
         }
     }
-    return drawable;
 }
+
+@interface _MTLCommandBuffer : NSObject
+- (void)presentDrawable:(id<MTLDrawable>)drawable;
+- (void)presentDrawable:(id<MTLDrawable>)drawable afterMinimumDuration:(CFTimeInterval)duration;
+@end
+
+%hook _MTLCommandBuffer
+
+- (void)presentDrawable:(id<MTLDrawable>)drawable {
+    RenderImGuiOverlay((id<MTLCommandBuffer>)self, drawable);
+    %orig(drawable);
+}
+
+- (void)presentDrawable:(id<MTLDrawable>)drawable afterMinimumDuration:(CFTimeInterval)duration {
+    RenderImGuiOverlay((id<MTLCommandBuffer>)self, drawable);
+    %orig(drawable, duration);
+}
+
+%end
 
 
 // ============================================================
@@ -935,23 +977,17 @@ static void OnAppBecameActive(CFNotificationCenterRef center, void *observer, CF
     @autoreleasepool {
         NSLog(@"[LARPTool] Loading v%d.%d", LT::VERSION_MAJOR, LT::VERSION_MINOR);
 
+        // Preload graphics frameworks before Logos initializes hooks
+        dlopen("/System/Library/Frameworks/Metal.framework/Metal", RTLD_NOW | RTLD_GLOBAL);
+        dlopen("/System/Library/Frameworks/QuartzCore.framework/QuartzCore", RTLD_NOW | RTLD_GLOBAL);
+
         // 1. Resolve Roblox memory layout
         Memory::RobloxABI::Resolve();
 
-        // 2. Hook CAMetalLayer -nextDrawable (Objective-C method hook via Dobby)
-        Class metalLayerClass = NSClassFromString(@"CAMetalLayer");
-        SEL   nextDrawableSel = @selector(nextDrawable);
-        Method m = class_getInstanceMethod(metalLayerClass, nextDrawableSel);
-        if (m) {
-            IMP original = method_getImplementation(m);
-            orig_nextDrawable = (id<CAMetalDrawable>(*)(CAMetalLayer *, SEL))original;
-            method_setImplementation(m, (IMP)hooked_nextDrawable);
-            NSLog(@"[LARPTool] CAMetalLayer::nextDrawable hooked ✓");
-        }
+        // 2. Initialize Logos hooks (_MTLCommandBuffer, UIWindow, UIApplication)
+        %init;
 
-        // 3. Hook ScriptContext to capture lua_State when it first executes.
-        //    We use Dobby on the C++ vtable slot if available.
-        // 4. Listen for app became active as guaranteed trigger attachment
+        // 3. Listen for app became active as guaranteed trigger attachment
         CFNotificationCenterAddObserver(
             CFNotificationCenterGetLocalCenter(),
             nullptr,
