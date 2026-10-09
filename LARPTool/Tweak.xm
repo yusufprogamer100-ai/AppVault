@@ -28,11 +28,15 @@
 #include "dobby.h"   // header-only stub; DobbyHook/DobbySymbolResolver are no-ops
                      // Actual runtime resolution uses dlsym / MSFindSymbol below.
 
+// Forward declare lua_State for Luau VM pointer in global scope
+struct lua_State;
+
 // Runtime symbol resolver: dynamic lookup across loaded images via dlsym
 static void *LT_FindSymbol(const char *symbol) {
     if (!symbol) return nullptr;
     return dlsym(RTLD_DEFAULT, symbol);
 }
+
 
 
 
@@ -99,12 +103,10 @@ static uintptr_t ScanPattern(uintptr_t base, size_t rangeSize,
     return 0;
 }
 
-// Forward declare lua_State for Luau VM pointer
-struct lua_State;
-
 // Convenience: read a value from an arbitrary address safely.
 template<typename T>
 static bool SafeRead(uintptr_t addr, T &out) {
+
     if (!addr) return false;
     vm_size_t sz = sizeof(T);
     kern_return_t kr = vm_read_overwrite(mach_task_self(),
