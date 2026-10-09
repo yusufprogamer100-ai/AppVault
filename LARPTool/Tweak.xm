@@ -751,30 +751,48 @@ static id<CAMetalDrawable> hooked_nextDrawable(CAMetalLayer *self, SEL _cmd) {
 
 
 // ============================================================
-#pragma mark - Touch Trigger Zone (UITapGestureRecognizer)
+#pragma mark - Touch Trigger Zone (Bottom-Left) & Watermark
 // ============================================================
 
 @interface LARPTriggerView : UIView
 @end
 
-@implementation LARPTriggerView
+@implementation LARPTriggerView {
+    UILabel *_badgeLabel;
+}
 
-- (instancetype)initAtTopRight {
+- (instancetype)initAtBottomLeft {
     CGRect screen = [UIScreen mainScreen].bounds;
-    CGRect frame  = CGRectMake(screen.size.width  - LT::TOUCH_SIZE,
-                               0,
-                               LT::TOUCH_SIZE,
-                               LT::TOUCH_SIZE);
+    // 55x55 px at bottom-left corner with 20px padding from edges
+    CGFloat size = 55.0f;
+    CGFloat x = 15.0f;
+    CGFloat y = screen.size.height - size - 25.0f;
+
+    CGRect frame = CGRectMake(x, y, size, size);
     self = [super initWithFrame:frame];
     if (self) {
-        self.backgroundColor    = [UIColor clearColor];
+        // Distinct semi-transparent dark circle with subtle blue border
+        self.backgroundColor = [UIColor colorWithRed:0.07f green:0.07f blue:0.09f alpha:0.75f];
+        self.layer.cornerRadius = size / 2.0f;
+        self.layer.borderWidth = 1.5f;
+        self.layer.borderColor = [UIColor colorWithRed:0.0f green:0.52f blue:0.87f alpha:0.8f].CGColor;
+        self.layer.masksToBounds = YES;
         self.userInteractionEnabled = YES;
-        self.autoresizingMask   = UIViewAutoresizingFlexibleLeftMargin;
+        self.autoresizingMask = UIViewAutoresizingFlexibleTopMargin | UIViewAutoresizingFlexibleRightMargin;
+
+        _badgeLabel = [[UILabel alloc] initWithFrame:self.bounds];
+        _badgeLabel.text = @"LT";
+        _badgeLabel.textColor = [UIColor whiteColor];
+        _badgeLabel.font = [UIFont boldSystemFontOfSize:14.0f];
+        _badgeLabel.textAlignment = NSTextAlignmentCenter;
+        _badgeLabel.userInteractionEnabled = NO;
+        [self addSubview:_badgeLabel];
 
         UITapGestureRecognizer *tap =
             [[UITapGestureRecognizer alloc]
                 initWithTarget:self action:@selector(handleTap:)];
         tap.numberOfTapsRequired = 1;
+        tap.cancelsTouchesInView = YES;
         [self addGestureRecognizer:tap];
     }
     return self;
@@ -782,20 +800,72 @@ static id<CAMetalDrawable> hooked_nextDrawable(CAMetalLayer *self, SEL _cmd) {
 
 - (void)handleTap:(UITapGestureRecognizer *)gr {
     UI::s_MenuOpen = !UI::s_MenuOpen;
-}
-
-// Forward all hit-testing through when menu is closed
-- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    UIView *hit = [super hitTest:point withEvent:event];
-    if (!UI::s_MenuOpen && hit == self) return nil; // transparent to game touches
-    return hit;
+    // Haptic feedback
+    if (@available(iOS 10.0, *)) {
+        UIImpactFeedbackGenerator *gen = [[UIImpactFeedbackGenerator alloc] initWithStyle:UIImpactFeedbackStyleMedium];
+        [gen impactOccurred];
+    }
 }
 
 @end
 
+// Helper: Show "made by chayoo077" banner at top of screen for 4 seconds
+static void ShowLaunchWatermark(UIWindow *parentWindow) {
+    if (!parentWindow) return;
+    
+    CGRect screen = [UIScreen mainScreen].bounds;
+    CGFloat width = 230.0f;
+    CGFloat height = 40.0f;
+    CGFloat x = (screen.size.width - width) / 2.0f;
+    CGFloat y = 45.0f; // Below notch/status bar
+
+    UIView *banner = [[UIView alloc] initWithFrame:CGRectMake(x, -50.0f, width, height)];
+    banner.backgroundColor = [UIColor colorWithRed:0.07f green:0.07f blue:0.09f alpha:0.92f];
+    banner.layer.cornerRadius = 10.0f;
+    banner.layer.borderWidth = 1.5f;
+    banner.layer.borderColor = [UIColor colorWithRed:0.0f green:0.70f blue:0.35f alpha:0.9f].CGColor;
+    banner.layer.masksToBounds = YES;
+    banner.userInteractionEnabled = NO;
+
+    UILabel *lbl = [[UILabel alloc] initWithFrame:banner.bounds];
+    lbl.text = @"made by chayoo077";
+    lbl.textColor = [UIColor whiteColor];
+    lbl.font = [UIFont boldSystemFontOfSize:13.0f];
+    lbl.textAlignment = NSTextAlignmentCenter;
+    [banner addSubview:lbl];
+
+    [parentWindow addSubview:banner];
+    [parentWindow bringSubviewToFront:banner];
+
+    // Slide down animation
+    [UIView animateWithDuration:0.45 delay:0.2 usingSpringWithDamping:0.75 initialSpringVelocity:0.5 options:0 animations:^{
+        banner.frame = CGRectMake(x, y, width, height);
+    } completion:^(BOOL finished) {
+        // Stay 4.0 seconds then slide up and fade away
+        [UIView animateWithDuration:0.5 delay:4.0 options:UIViewAnimationOptionCurveEaseIn animations:^{
+            banner.alpha = 0.0f;
+            banner.frame = CGRectMake(x, -50.0f, width, height);
+        } completion:^(BOOL f) {
+            [banner removeFromSuperview];
+        }];
+    }];
+}
+
 // ============================================================
-#pragma mark - UIWindow Hook – inject trigger view
+#pragma mark - UIWindow Hook – inject trigger view & watermark
 // ============================================================
+
+static void AttachOverlayToWindow(UIWindow *w) {
+    if (!w || [w viewWithTag:0xCAFE]) return;
+
+    LARPTriggerView *tv = [[LARPTriggerView alloc] initAtBottomLeft];
+    tv.tag = 0xCAFE;
+    [w addSubview:tv];
+    [w bringSubviewToFront:tv];
+
+    ShowLaunchWatermark(w);
+    NSLog(@"[LARPTool] Trigger button and launch watermark attached to window.");
+}
 
 %hook UIWindow
 
@@ -803,27 +873,20 @@ static id<CAMetalDrawable> hooked_nextDrawable(CAMetalLayer *self, SEL _cmd) {
     %orig;
     static dispatch_once_t once;
     dispatch_once(&once, ^{
-        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.5 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
-            UIWindow *w = [self isKeyWindow] ? self : [[UIApplication sharedApplication] keyWindow];
-            if (w && ![w viewWithTag:0xCAFE]) {
-                LARPTriggerView *tv = [[LARPTriggerView alloc] initAtTopRight];
-                tv.tag = 0xCAFE;
-                [w addSubview:tv];
-                [w bringSubviewToFront:tv];
-                NSLog(@"[LARPTool] Trigger view attached successfully to window.");
-            }
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.0 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            UIWindow *target = self ?: [[UIApplication sharedApplication] keyWindow];
+            AttachOverlayToWindow(target);
         });
     });
 }
 
 %end
 
+
 // ============================================================
 #pragma mark - UITouch passthrough hook
 // ============================================================
 // When ImGui has captured the mouse we swallow Roblox touch events.
-// When it hasn't, we let them through.
-
 %hook UIApplication
 
 - (void)sendEvent:(UIEvent *)event {
@@ -845,6 +908,23 @@ static id<CAMetalDrawable> hooked_nextDrawable(CAMetalLayer *self, SEL _cmd) {
 }
 
 %end
+
+// Fallback: Hook notification for application active to ensure overlay is on screen
+static void OnAppBecameActive(CFNotificationCenterRef center, void *observer, CFStringRef name, const void *object, CFDictionaryRef userInfo) {
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(1.2 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+        UIWindow *w = [[UIApplication sharedApplication] keyWindow];
+        if (!w) {
+            for (UIWindow *win in [[UIApplication sharedApplication] windows]) {
+                if (win.isKeyWindow || [win isMemberOfClass:[UIWindow class]]) {
+                    w = win;
+                    break;
+                }
+            }
+        }
+        AttachOverlayToWindow(w);
+    });
+}
+
 
 
 // ============================================================
@@ -871,11 +951,17 @@ static id<CAMetalDrawable> hooked_nextDrawable(CAMetalLayer *self, SEL _cmd) {
 
         // 3. Hook ScriptContext to capture lua_State when it first executes.
         //    We use Dobby on the C++ vtable slot if available.
-        if (Memory::RobloxABI::s_TaskSchedulerPtr) {
-            NSLog(@"[LARPTool] TaskScheduler located @ 0x%lx",
-                  Memory::RobloxABI::s_TaskSchedulerPtr);
-        }
+        // 4. Listen for app became active as guaranteed trigger attachment
+        CFNotificationCenterAddObserver(
+            CFNotificationCenterGetLocalCenter(),
+            nullptr,
+            OnAppBecameActive,
+            (CFStringRef)UIApplicationDidBecomeActiveNotification,
+            nullptr,
+            CFNotificationSuspensionBehaviorDeliverImmediately
+        );
 
-        NSLog(@"[LARPTool] Fully loaded. Tap top-right corner to open menu.");
+        NSLog(@"[LARPTool] Fully loaded. Watermark 'made by chayoo077' and Bottom-Left trigger button armed.");
     }
 }
+
