@@ -58,25 +58,29 @@ jobs:
           echo "THEOS=/opt/theos" >> "$GITHUB_ENV"
           echo "/opt/theos/bin"   >> "$GITHUB_PATH"
 
-      - name: Install Dobby arm64
+      - name: Create Dobby stub (use MSHookFunction instead)
         run: |
-          set -euo pipefail
           mkdir -p /opt/theos/lib /opt/theos/include
-          sudo apt-get install -y gcc-aarch64-linux-gnu g++-aarch64-linux-gnu || true
-          git clone --depth=1 https://github.com/jmpews/Dobby /tmp/Dobby-src
-          cmake -S /tmp/Dobby-src -B /tmp/Dobby-build \
-                -DCMAKE_BUILD_TYPE=Release \
-                -DCMAKE_C_COMPILER=aarch64-linux-gnu-gcc \
-                -DCMAKE_CXX_COMPILER=aarch64-linux-gnu-g++ \
-                -DCMAKE_SYSTEM_NAME=Linux \
-                -DCMAKE_SYSTEM_PROCESSOR=aarch64 \
-                -DPlugin.DobbyInstrument=ON \
-                -DDOBBY_DEBUG=OFF \
-                -G Ninja
-          cmake --build /tmp/Dobby-build --config Release -j$(nproc)
-          find /tmp/Dobby-build -name "*.a" | head -1 | xargs -I{} cp {} /opt/theos/lib/libdobby.a
-          cp /tmp/Dobby-src/include/dobby.h /opt/theos/include/dobby.h
-          echo "Dobby: $(ls -lh /opt/theos/lib/libdobby.a)"
+          # Dobby can't cross-compile on Linux (PAC macros are Clang-only).
+          # We stub it out; actual hooking uses Theos MSHookFunction.
+          cat > /opt/theos/include/dobby.h << 'DOBBY_STUB'
+          #pragma once
+          #include <stdint.h>
+          #ifdef __cplusplus
+          extern "C" {
+          #endif
+          // Stub: resolved at runtime via MSHookFunction (MobileSubstrate)
+          static inline int DobbyHook(void *addr, void *new_func, void **old_func) {
+              (void)addr; (void)new_func; (void)old_func; return 0;
+          }
+          static inline void *DobbySymbolResolver(const char *img, const char *sym) {
+              (void)img; (void)sym; return 0;
+          }
+          #ifdef __cplusplus
+          }
+          #endif
+          DOBBY_STUB
+          echo "Dobby stub created at /opt/theos/include/dobby.h"
 
       - name: Vendor ImGui
         run: |

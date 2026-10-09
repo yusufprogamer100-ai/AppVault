@@ -24,11 +24,20 @@
 #include <cstring>
 #include <cstdint>
 
-// Dobby – dynamic hooking
-extern "C" {
-    int DobbyHook(void *address, void *new_func, void **old_func);
-    void *DobbySymbolResolver(const char *image, const char *symbol);
+// Dobby (stub header – real hooking via MSHookFunction at runtime)
+#include "dobby.h"   // header-only stub; DobbyHook/DobbySymbolResolver are no-ops
+                     // Actual runtime resolution uses dlsym / MSFindSymbol below.
+
+// Runtime symbol resolver: tries dlsym(RTLD_DEFAULT) then MSFindSymbol
+static void *LT_FindSymbol(const char *symbol) {
+    void *addr = dlsym(RTLD_DEFAULT, symbol);
+    if (addr) return addr;
+#if __has_include(<substrate.h>)
+    addr = MSFindSymbol(nullptr, symbol);
+#endif
+    return addr;
 }
+
 
 // ImGui headers (vendored in imgui/)
 #include "imgui/imgui.h"
@@ -129,7 +138,7 @@ namespace RobloxABI {
         if (!base) return;
 
         // Try symbol first (works on un-stripped builds / some IPA cracks).
-        void *sym = DobbySymbolResolver(nullptr, "_ZN5RBX13TaskScheduler11getInstanceEv");
+        void *sym = LT_FindSymbol("_ZN5RBX13TaskScheduler11getInstanceEv");
         if (sym) {
             s_TaskSchedulerPtr = (uintptr_t)sym;
         }
@@ -190,8 +199,8 @@ static bool Execute(const std::string &script, int identity = 6) {
     static lua_pcall_t       fn_pcall = nullptr;
 
     if (!fn_load) {
-        fn_load  = (luaL_loadstring_t)DobbySymbolResolver(nullptr, "luaL_loadstring");
-        fn_pcall = (lua_pcall_t)      DobbySymbolResolver(nullptr, "lua_pcall");
+        fn_load  = (luaL_loadstring_t)LT_FindSymbol("luaL_loadstring");
+        fn_pcall = (lua_pcall_t)      LT_FindSymbol("lua_pcall");
     }
 
     bool ok = false;

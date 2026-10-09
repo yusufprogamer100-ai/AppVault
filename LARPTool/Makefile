@@ -43,10 +43,10 @@ $(TWEAK_NAME)_OBJCFLAGS       = -fobjc-arc -std=c++17 -O2 \
 # ── Linker Flags ─────────────────────────────────────────────────────────────
 $(TWEAK_NAME)_FRAMEWORKS      = Metal MetalKit UIKit QuartzCore Foundation CoreGraphics
 
-# Dobby is vendored as a static lib inside the Theos toolchain or
-# a prebuilt placed in $THEOS/lib/. Adjust path if you host it elsewhere.
-$(TWEAK_NAME)_LIBRARIES       = dobby
-$(TWEAK_NAME)_LIBRARY_FLAGS   = -L$(THEOS)/lib
+# Dobby is stubbed (header-only); substrate/libhooker provides runtime hooking.
+# $(TWEAK_NAME)_LIBRARIES     = dobby
+# $(TWEAK_NAME)_LIBRARY_FLAGS = -L$(THEOS)/lib
+
 
 # ── Logos Flags ──────────────────────────────────────────────────────────────
 $(TWEAK_NAME)_LOGOS_DEFAULT_GENERATOR = internal
